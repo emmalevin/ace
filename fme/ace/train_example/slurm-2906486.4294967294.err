@@ -1,0 +1,113 @@
+/scratch/gpfs/GVECCHI/el2358/ace/fme/core/cuhpx/tools.py:19: UserWarning: pkg_resources is deprecated as an API. See https://setuptools.pypa.io/en/latest/pkg_resources.html. The pkg_resources package is slated for removal as early as 2025-11-30. Refrain from using this package or pin to Setuptools<81.
+  import pkg_resources
+2025-12-11 14:46:41,470 - root - WARNING - Environmental variable BEAKER_EXPERIMENT_ID not found.
+2025-12-11 14:46:41,470 - root - INFO - Environmental variable SLURM_JOB_ID=2906486.
+2025-12-11 14:46:41,470 - root - INFO - Environmental variable SLURM_JOB_USER=el2358.
+2025-12-11 14:46:41,470 - root - WARNING - Environmental variable FME_TRAIN_DIR not found.
+2025-12-11 14:46:41,471 - root - WARNING - Environmental variable FME_VALID_DIR not found.
+2025-12-11 14:46:41,471 - root - WARNING - Environmental variable FME_STATS_DIR not found.
+2025-12-11 14:46:41,471 - root - WARNING - Environmental variable FME_CHECKPOINT_DIR not found.
+2025-12-11 14:46:41,471 - root - WARNING - Environmental variable FME_OUTPUT_DIR not found.
+2025-12-11 14:46:41,471 - root - WARNING - Environmental variable FME_IMAGE not found.
+2025-12-11 14:46:41,471 - root - INFO - --------------- Versions ---------------
+2025-12-11 14:46:41,471 - root - INFO - Torch: 2.8.0
+2025-12-11 14:46:41,471 - root - INFO - ----------------------------------------
+2025-12-11 14:46:41,471 - root - WARNING - Beaker Experiment ID not found.
+2025-12-11 14:46:41,471 - root - INFO - Initializing training data loader
+2025-12-11 14:46:41,479 - root - INFO - Opening data at /scratch/gpfs/GVECCHI/el2358/ACE2/SAMPLE_DATA/*.nc
+[rank0]: Traceback (most recent call last):
+[rank0]:   File "<frozen runpy>", line 198, in _run_module_as_main
+[rank0]:   File "<frozen runpy>", line 88, in _run_code
+[rank0]:   File "/scratch/gpfs/GVECCHI/el2358/ace/fme/ace/train/__main__.py", line 7, in <module>
+[rank0]:     main(args.yaml_config, override_dotlist=args.override)
+[rank0]:     ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/scratch/gpfs/GVECCHI/el2358/ace/fme/ace/train/train.py", line 281, in main
+[rank0]:     run_train_from_config(config)
+[rank0]:     ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^
+[rank0]:   File "/scratch/gpfs/GVECCHI/el2358/ace/fme/ace/train/train.py", line 241, in run_train_from_config
+[rank0]:     run_train(TrainBuilders(config), config)
+[rank0]:     ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/scratch/gpfs/GVECCHI/el2358/ace/fme/ace/train/train.py", line 264, in run_train
+[rank0]:     trainer = build_trainer(builders, config)
+[rank0]:   File "/scratch/gpfs/GVECCHI/el2358/ace/fme/ace/train/train.py", line 93, in build_trainer
+[rank0]:     train_data = builder.get_train_data()
+[rank0]:   File "/scratch/gpfs/GVECCHI/el2358/ace/fme/ace/train/train_config.py", line 310, in get_train_data
+[rank0]:     return get_gridded_data(
+[rank0]:         self.config.train_loader,
+[rank0]:         requirements=data_requirements,
+[rank0]:         train=True,
+[rank0]:     )
+[rank0]:   File "/scratch/gpfs/GVECCHI/el2358/ace/fme/ace/data_loading/getters.py", line 70, in get_gridded_data
+[rank0]:     dataset, properties = config.get_dataset(requirements.names, n_timesteps_preloaded)
+[rank0]:                           ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/scratch/gpfs/GVECCHI/el2358/ace/fme/ace/data_loading/config.py", line 81, in get_dataset
+[rank0]:     return self.dataset.build(names, n_timesteps)
+[rank0]:            ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/scratch/gpfs/GVECCHI/el2358/ace/fme/core/dataset/concat.py", line 94, in build
+[rank0]:     return get_dataset(
+[rank0]:         self.concat,
+[rank0]:     ...<2 lines>...
+[rank0]:         strict=self.strict,
+[rank0]:     )
+[rank0]:   File "/scratch/gpfs/GVECCHI/el2358/ace/fme/core/dataset/concat.py", line 65, in get_dataset
+[rank0]:     datasets, properties = get_xarray_datasets(
+[rank0]:                            ~~~~~~~~~~~~~~~~~~~^
+[rank0]:         dataset_configs, names, n_timesteps, strict=strict
+[rank0]:         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:     )
+[rank0]:     ^
+[rank0]:   File "/scratch/gpfs/GVECCHI/el2358/ace/fme/core/dataset/xarray.py", line 973, in get_xarray_datasets
+[rank0]:     dataset, new_properties = get_xarray_dataset(config, names, n_timesteps)
+[rank0]:                               ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/scratch/gpfs/GVECCHI/el2358/ace/fme/core/dataset/xarray.py", line 957, in get_xarray_dataset
+[rank0]:     dataset = XarrayDataset(config, names, n_timesteps)
+[rank0]:   File "/scratch/gpfs/GVECCHI/el2358/ace/fme/core/dataset/xarray.py", line 539, in __init__
+[rank0]:     self._get_files_stats(config.n_repeats, config.infer_timestep)
+[rank0]:     ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]:   File "/scratch/gpfs/GVECCHI/el2358/ace/fme/core/dataset/xarray.py", line 666, in _get_files_stats
+[rank0]:     inferred_timestep = _get_timestep(np.concatenate(raw_times))
+[rank0]:   File "/scratch/gpfs/GVECCHI/el2358/ace/fme/core/dataset/xarray.py", line 896, in _get_timestep
+[rank0]:     if not (timestep > datetime.timedelta(days=0)):
+[rank0]:             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+[rank0]: TypeError: '>' not supported between instances of 'int' and 'datetime.timedelta'
+E1211 14:46:42.917000 432910 /scratch/gpfs/GVECCHI/el2358/.conda/envs/geoclim/lib/python3.13/site-packages/torch/distributed/elastic/multiprocessing/api.py:874] failed (exitcode: 1) local_rank: 0 (pid: 432919) of binary: /home/el2358/.conda/envs/geoclim/bin/python
+Traceback (most recent call last):
+  File "/home/el2358/.conda/envs/geoclim/bin/torchrun", line 9, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/home/el2358/.conda/envs/geoclim/lib/python3.13/site-packages/torch/distributed/elastic/multiprocessing/errors/__init__.py", line 357, in wrapper
+    return f(*args, **kwargs)
+  File "/home/el2358/.conda/envs/geoclim/lib/python3.13/site-packages/torch/distributed/run.py", line 901, in main
+    run(args)
+    ~~~^^^^^^
+  File "/home/el2358/.conda/envs/geoclim/lib/python3.13/site-packages/torch/distributed/run.py", line 892, in run
+    elastic_launch(
+    ~~~~~~~~~~~~~~~
+        config=config,
+        ~~~~~~~~~~~~~~
+        entrypoint=cmd,
+        ~~~~~~~~~~~~~~~
+    )(*cmd_args)
+    ~^^^^^^^^^^^
+  File "/home/el2358/.conda/envs/geoclim/lib/python3.13/site-packages/torch/distributed/launcher/api.py", line 143, in __call__
+    return launch_agent(self._config, self._entrypoint, list(args))
+  File "/home/el2358/.conda/envs/geoclim/lib/python3.13/site-packages/torch/distributed/launcher/api.py", line 277, in launch_agent
+    raise ChildFailedError(
+    ...<2 lines>...
+    )
+torch.distributed.elastic.multiprocessing.errors.ChildFailedError: 
+============================================================
+fme.ace.train FAILED
+------------------------------------------------------------
+Failures:
+  <NO_OTHER_FAILURES>
+------------------------------------------------------------
+Root Cause (first observed failure):
+[0]:
+  time      : 2025-12-11_14:46:42
+  host      : della-l04g15
+  rank      : 0 (local_rank: 0)
+  exitcode  : 1 (pid: 432919)
+  error_file: <N/A>
+  traceback : To enable traceback see: https://pytorch.org/docs/stable/elastic/errors.html
+============================================================
