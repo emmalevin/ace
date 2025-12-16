@@ -16,4 +16,4 @@ module purge
 module load anaconda3/2025.6
 conda activate geoclim
 
-torchrun --nproc_per_node 1 -m fme.ace.train inference_ace2_2017_401_500.yaml
+torchrun --nproc_per_node 1 -m fme.ace.train train_sample_subset.yaml

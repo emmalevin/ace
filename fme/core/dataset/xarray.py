@@ -28,7 +28,11 @@ from fme.core.coordinates import (
 )
 from fme.core.dataset.config import DatasetConfigABC
 from fme.core.dataset.properties import DatasetProperties
-from fme.core.dataset.time import RepeatedInterval, TimeSlice
+from fme.core.dataset.time import (
+    ExplicitTimeIntervals,
+    RepeatedInterval,
+    TimeSlice,
+)
 from fme.core.dataset.utils import FillNaNsConfig
 from fme.core.mask_provider import MaskProvider
 from fme.core.stacker import Stacker
@@ -448,7 +452,7 @@ class XarrayDataConfig(DatasetConfigABC):
     n_repeats: int = 1
     engine: Literal["netcdf4", "h5netcdf", "zarr"] = "netcdf4"
     spatial_dimensions: Literal["healpix", "latlon"] = "latlon"
-    subset: Slice | TimeSlice | RepeatedInterval = dataclasses.field(
+    subset: Slice | TimeSlice | RepeatedInterval | ExplicitTimeIntervals = dataclasses.field(
         default_factory=Slice
     )
     infer_timestep: bool = True
@@ -907,23 +911,41 @@ def _get_timestep(time: np.ndarray) -> datetime.timedelta:
 
 
 def _as_index_selection(
-    subset: Slice | TimeSlice | RepeatedInterval, dataset: XarrayDataset
+    subset: Slice | TimeSlice | RepeatedInterval | ExplicitTimeIntervals,
+    dataset: XarrayDataset,
 ) -> slice | np.ndarray:
-    """Converts a subset defined either as a Slice or TimeSlice into an index slice
-    based on time coordinate in provided dataset.
+    """Converts a subset definition into an index-based selection
+    for the provided dataset.
     """
     if isinstance(subset, Slice):
         index_selection = subset.slice
+
     elif isinstance(subset, TimeSlice):
         index_selection = subset.slice(dataset.sample_start_times)
+
     elif isinstance(subset, RepeatedInterval):
         try:
-            index_selection = subset.get_boolean_mask(len(dataset), dataset.timestep)
+            index_selection = subset.get_boolean_mask(
+                len(dataset), dataset.timestep
+            )
         except ValueError as e:
-            raise ValueError(f"Error when applying RepeatedInterval to dataset: {e}")
+            raise ValueError(
+                f"Error when applying RepeatedInterval to dataset: {e}"
+            )
+
+    elif isinstance(subset, ExplicitTimeIntervals):
+        index_selection = subset.get_boolean_mask(
+            dataset.sample_start_times
+        )
+
     else:
-        raise TypeError(f"subset must be Slice or TimeSlice, got {type(subset)}")
+        raise TypeError(
+            f"subset must be Slice, TimeSlice, RepeatedInterval, "
+            f"or ExplicitTimeIntervals, got {type(subset)}"
+        )
+
     return index_selection
+
 
 
 class XarraySubset(torch.utils.data.Dataset):

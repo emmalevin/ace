@@ -139,3 +139,92 @@ class RepeatedInterval:
         num_blocks = length // block_length + 1
         mask = np.tile(block, num_blocks)[:length]
         return mask
+
+
+@dataclasses.dataclass
+class ExplicitTimeIntervals:
+    """
+    Configuration for selecting explicit, non-contiguous time intervals.
+
+    This class allows training on specific time windows or specific index
+    groups (e.g., selected 6-hour or 12-hour blocks), rather than a
+    contiguous slice or a repeated pattern.
+
+    Exactly one of `intervals` or `indices` must be provided.
+
+    Parameters:
+        intervals:
+            List of (start_time, length) tuples, where:
+              - start_time is a string compatible with CFTimeIndex
+              - length is the number of timesteps to include
+            Example:
+              [("2000-01-01T00:00", 3), ("2000-04-01T00:00", 3)]
+            This would select 3 timesteps starting at Jan 1 00:00 and
+            3 timesteps starting at April 1 00:00.
+
+        indices:
+            List of explicit index groups.
+            Example:
+              [[0, 1, 2], [100, 101, 102]]
+            This would select indices 0-2 and 100-102.
+
+    Examples:
+        To train on specific 12-hour blocks (3 timesteps each) at Jan 1 and April 1:
+        
+        >>> ExplicitTimeIntervals(intervals=[("2000-01-01T00:00", 3), ("2000-04-01T00:00", 3)])
+        
+        To train on specific index groups:
+        
+        >>> ExplicitTimeIntervals(indices=[[0, 1, 2], [100, 101, 102]])
+    """
+
+    intervals: list[tuple[str, int]] | None = None
+    indices: list[list[int]] | None = None
+
+    def __post_init__(self):
+        if (self.intervals is None) == (self.indices is None):
+            raise ValueError(
+                "Exactly one of `intervals` or `indices` must be provided."
+            )
+
+    def get_boolean_mask(self, time: xr.CFTimeIndex) -> np.ndarray:
+        """
+        Return a boolean mask selecting only the specified time points.
+
+        Args:
+            time: CFTimeIndex of the dataset.
+
+        Returns:
+            Boolean numpy array of length len(time).
+        """
+        mask = np.zeros(len(time), dtype=bool)
+
+        # Case 1: explicit index groups
+        if self.indices is not None:
+            for group in self.indices:
+                for idx in group:
+                    if idx < 0 or idx >= len(time):
+                        raise ValueError(
+                            f"Index {idx} is out of bounds for time index of length {len(time)}"
+                        )
+                    mask[idx] = True
+            return mask
+
+        # Case 2: explicit time intervals
+        for start_time, length in self.intervals:
+            try:
+                start_idx = time.get_loc(start_time)
+            except KeyError as exc:
+                raise ValueError(
+                    f"Start time {start_time} not found in time index."
+                ) from exc
+
+            end_idx = start_idx + length
+            if end_idx > len(time):
+                raise ValueError(
+                    f"Interval starting at {start_time} with length {length} "
+                    f"extends beyond time index of length {len(time)}"
+                )
+            mask[start_idx:end_idx] = True
+
+        return mask

@@ -1,8 +1,8 @@
 experiment_dir: /scratch/gpfs/GVECCHI/el2358/ace/train_output
 save_checkpoint: true
 validate_using_ema: true
-max_epochs: 10
-n_forward_steps: 1
+max_epochs: 1
+n_forward_steps: 2
 inference:
   n_forward_steps: 2
   forward_steps_in_memory: 50
@@ -26,7 +26,10 @@ train_loader:
   prefetch_factor: 4
   dataset:
       data_path: /scratch/gpfs/GVECCHI/el2358/ace/training_data
-      subset: 
+      subset:
+        indices:
+          - [0, 1, 2]      # Points 0-2 (Jan 1 00 - Jan 1 12 for 12-hourly data)
+          - [100, 101, 102]  
 validation_loader:
   batch_size: 16
   num_data_workers: 4
@@ -60,11 +63,11 @@ stepper:
           separable: false
       normalization:
         network:
-          global_means_path: centering.nc
-          global_stds_path: scaling-full-field.nc
+          global_means_path: /scratch/gpfs/GVECCHI/el2358/ACE2/training_validation_data/normalization/centering.nc
+          global_stds_path: /scratch/gpfs/GVECCHI/el2358/ACE2/training_validation_data/normalization/scaling-full-field.nc
         loss:
-          global_means_path: centering.nc
-          global_stds_path: scaling-residual.nc
+          global_means_path: /scratch/gpfs/GVECCHI/el2358/ACE2/training_validation_data/normalization/centering.nc
+          global_stds_path: /scratch/gpfs/GVECCHI/el2358/ACE2/training_validation_data/normalization/scaling-residual.nc
       ocean:
         surface_temperature_name: surface_temperature
         ocean_fraction_name: ocean_fraction
