@@ -131,13 +131,13 @@ class InferenceDataLoaderConfig:
     persistence_names: Sequence[str] | None = None
 
     def __post_init__(self):
-        if isinstance(self.dataset, XarrayDataConfig):
-            if self.dataset.subset != Slice(None, None, None):
-                raise ValueError("Inference data may not be subset.")
-        elif isinstance(self.dataset, MergeNoConcatDatasetConfig):
-            for data in self.dataset.merge:
-                if data.subset != Slice(None, None, None):
-                    raise ValueError(f"Inference data may not be subset.")
+        # if isinstance(self.dataset, XarrayDataConfig):
+        #     if self.dataset.subset != Slice(None, None, None):
+        #         raise ValueError("Inference data may not be subset.")
+        # elif isinstance(self.dataset, MergeNoConcatDatasetConfig):
+        #     for data in self.dataset.merge:
+        #         if data.subset != Slice(None, None, None):
+        #             raise ValueError(f"Inference data may not be subset.")
         self._zarr_engine_used = self.dataset.zarr_engine_used
 
     @property
@@ -174,13 +174,14 @@ class ForcingDataLoaderConfig:
     persistence_names: Sequence[str] | None = None
 
     def __post_init__(self):
-        if isinstance(self.dataset, XarrayDataConfig):
-            if self.dataset.subset != Slice(None, None, None):
-                raise ValueError("Inference data may not be subset.")
-        elif isinstance(self.dataset, MergeNoConcatDatasetConfig):
-            for data in self.dataset.merge:
-                if data.subset != Slice(None, None, None):
-                    raise ValueError(f"Inference data may not be subset.")
+        pass
+        # if isinstance(self.dataset, XarrayDataConfig):
+        #     if self.dataset.subset != Slice(None, None, None):
+        #         raise ValueError("Inference data may not be subset.")
+        # elif isinstance(self.dataset, MergeNoConcatDatasetConfig):
+        #     for data in self.dataset.merge:
+        #         if data.subset != Slice(None, None, None):
+        #             raise ValueError(f"Inference data may not be subset.")
 
     def build_inference_config(self, start_indices: ExplicitIndices):
         return InferenceDataLoaderConfig(

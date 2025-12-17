@@ -35,6 +35,7 @@ from fme.ace.stepper.single_module import StepperConfig
 from fme.core.cli import prepare_config, prepare_directory
 from fme.core.dataset.data_typing import VariableMetadata
 from fme.core.dataset_info import IncompatibleDatasetInfo
+from fme.core.dataset.xarray import XarrayDataConfig, _open_xr_dataset
 from fme.core.dicts import to_flat_dict
 from fme.core.generics.inference import get_record_to_wandb, run_inference
 from fme.core.logging_utils import LoggingConfig
@@ -51,30 +52,86 @@ class InitialConditionConfig:
     Configuration for initial conditions.
 
     .. note::
-        The data specified under path should contain a time dimension of at least
-        length 1. If multiple times are present in the dataset specified by ``path``,
-        the inference will start an ensemble simulation using each IC along a
-        leading sample dimension. Specific times can be selected from the dataset
-        by using ``start_indices``.
+        The data specified should contain a time dimension of at least
+        length 1. If multiple times are present in the dataset, the inference
+        will start an ensemble simulation using each IC along a leading sample
+        dimension. Specific times can be selected from the dataset by using
+        ``start_indices``.
 
     Parameters:
-        path: The path to the initial conditions dataset.
-        engine: The engine used to open the dataset.
+        dataset: Configuration for the initial condition dataset. Can specify
+            a directory with file_pattern to load multiple files, or a single
+            file path. If not provided, will use `path` and `engine` for
+            backward compatibility.
+        path: (Deprecated) Path to a single initial condition file.
+            Use `dataset.data_path` and `dataset.file_pattern` instead.
+        engine: (Deprecated) Engine used to open the dataset.
+            Use `dataset.engine` instead.
         start_indices: optional specification of the subset of
             initial conditions to use.
     """
 
-    path: str
+    dataset: XarrayDataConfig | None = None
+    path: str | None = None
     engine: Literal["netcdf4", "h5netcdf", "zarr"] = "netcdf4"
     start_indices: StartIndices | None = None
 
+    def __post_init__(self):
+        """Handle backward compatibility with old path/engine format."""
+        if self.dataset is None:
+            if self.path is None:
+                raise ValueError(
+                    "Either 'dataset' or 'path' must be provided for InitialConditionConfig"
+                )
+            # Create XarrayDataConfig from path for backward compatibility
+            # If path is a directory, use default pattern; if file, use exact filename
+            import os
+            if os.path.isdir(self.path):
+                file_pattern = "*.nc"
+                data_path = self.path
+            else:
+                # Single file - extract directory and filename
+                data_path = os.path.dirname(self.path) or "."
+                file_pattern = os.path.basename(self.path)
+            self.dataset = XarrayDataConfig(
+                data_path=data_path,
+                file_pattern=file_pattern,
+                engine=self.engine,
+            )
+
     def get_dataset(self) -> xr.Dataset:
-        ds = xr.open_dataset(
-            self.path,
-            engine=self.engine,
-            decode_times=CFDatetimeCoder(use_cftime=True),
-            decode_timedelta=False,
-        )
+        """Load initial condition dataset from directory or single file."""
+        import glob
+        
+        # Get all file paths matching the pattern
+        if os.path.isdir(self.dataset.data_path):
+            pattern = os.path.join(self.dataset.data_path, self.dataset.file_pattern)
+            paths = sorted(glob.glob(pattern))
+        else:
+            # Single file path (backward compatibility)
+            paths = [self.dataset.data_path]
+        
+        if not paths:
+            raise ValueError(
+                f"No files found matching '{self.dataset.file_pattern}' "
+                f"in '{self.dataset.data_path}'"
+            )
+        
+        # Open and concatenate datasets along time dimension
+        datasets = []
+        for path in paths:
+            with _open_xr_dataset(
+                path,
+                engine=self.dataset.engine,
+            ) as ds:
+                datasets.append(ds)
+        
+        # Concatenate along time dimension if multiple files
+        if len(datasets) > 1:
+            ds = xr.concat(datasets, dim="time")
+        else:
+            ds = datasets[0]
+        
         return self._subselect_initial_conditions(ds)
 
     def _subselect_initial_conditions(self, ds: xr.Dataset) -> xr.Dataset:
