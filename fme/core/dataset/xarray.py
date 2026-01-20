@@ -29,7 +29,6 @@ from fme.core.coordinates import (
 from fme.core.dataset.config import DatasetConfigABC
 from fme.core.dataset.properties import DatasetProperties
 from fme.core.dataset.time import (
-    ExplicitTimeIntervals,
     RepeatedInterval,
     TimeSlice,
 )
@@ -452,8 +451,7 @@ class XarrayDataConfig(DatasetConfigABC):
     n_repeats: int = 1
     engine: Literal["netcdf4", "h5netcdf", "zarr"] = "netcdf4"
     spatial_dimensions: Literal["healpix", "latlon"] = "latlon"
-    #subset: Slice | TimeSlice | RepeatedInterval | ExplicitTimeIntervals = dataclasses.field(
-    subset: Slice | TimeSlice | RepeatedInterval | list[int]  = dataclasses.field(
+    subset: Slice | TimeSlice | RepeatedInterval | list[int] = dataclasses.field(
         default_factory=Slice
     )
     infer_timestep: bool = True
@@ -674,7 +672,13 @@ class XarrayDataset(torch.utils.data.Dataset):
             )
             self._timestep = inferred_timestep
         else:
-            self._timestep = None
+            # Even if infer_timestep is False, we still need to compute timestep
+            # from the first file for the stepper. Individual files should have
+            # uniform timesteps even if there are gaps between files.
+            if len(raw_times) > 0 and len(raw_times[0]) > 1:
+                self._timestep = _get_timestep(raw_times[0])
+            else:
+                self._timestep = None
             time_coord = raw_times
 
         cum_num_timesteps = _get_cumulative_timesteps(time_coord)
@@ -912,7 +916,7 @@ def _get_timestep(time: np.ndarray) -> datetime.timedelta:
 
 
 def _as_index_selection(
-    subset: Slice | TimeSlice | RepeatedInterval | ExplicitTimeIntervals,
+    subset: Slice | TimeSlice | RepeatedInterval,
     dataset: XarrayDataset,
 ) -> slice | np.ndarray:
     """Converts a subset definition into an index-based selection
@@ -934,15 +938,9 @@ def _as_index_selection(
                 f"Error when applying RepeatedInterval to dataset: {e}"
             )
 
-    elif isinstance(subset, ExplicitTimeIntervals):
-        index_selection = subset.get_boolean_mask(
-            dataset.sample_start_times
-        )
-
     else:
         raise TypeError(
-            f"subset must be Slice, TimeSlice, RepeatedInterval, "
-            f"or ExplicitTimeIntervals, got {type(subset)}"
+            f"subset must be Slice, TimeSlice, or RepeatedInterval, got {type(subset)}"
         )
 
     return index_selection
