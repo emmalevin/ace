@@ -1,8 +1,13 @@
+# 0. load px, py
+# 1. pick initial training points
+# 2. begin loop
+# 3. train the models using the selected points
+# 4. compute the acquisition function for each candidate point 
+# 5. select the point(s) with the highest acquisition function
+# 6. add the selected point(s) to the training dataset
+# 7. repeat steps 3-6 until the desired number of training points is reached
 
-'''
-Code to compute the KDE approximated PDF of our target variable (surface pressure in the Gulf of Mexico).
-To do so we use all the training data.
-'''
+#.sh files: 1 (have), 3, 4/5
 
 
 # For a given iteration of the algorithm

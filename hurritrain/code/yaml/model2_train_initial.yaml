@@ -26,20 +26,20 @@ train_loader:
   num_data_workers: 4
   prefetch_factor: 4
   dataset:
-    data_path: /scratch/gpfs/GVECCHI/el2358/ace/training_data
-    subset:
-      indices:
-      - - 115
-        - 116
-        - 117
+      data_path: /scratch/gpfs/GVECCHI/el2358/ace/training_data
+      infer_timestep: false
+      subset:
+        - 0
+        - 100
 validation_loader:
-  batch_size: 16
+  batch_size: 1
   num_data_workers: 4
   prefetch_factor: 4
   dataset:
     data_path: /scratch/gpfs/GVECCHI/el2358/ace/training_data
+    infer_timestep: false
     subset:
-      step: 5
+      - 0
 optimization:
   enable_automatic_mixed_precision: false
   lr: 0.0001

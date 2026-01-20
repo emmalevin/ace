@@ -21,23 +21,24 @@ logging:
   project: ace
   entity: your_wandb_entity
 train_loader:
-  batch_size: 4
+  batch_size: 1
   num_data_workers: 4
   prefetch_factor: 4
   dataset:
       data_path: /scratch/gpfs/GVECCHI/el2358/ace/training_data
+      infer_timestep: false
       subset:
-        indices:
-          - [0, 1, 2]      # Points 0-2 (Jan 1 00 - Jan 1 12 for 12-hourly data)
-          - [100, 101, 102]  
+        - 0
+        - 100
 validation_loader:
-  batch_size: 16
+  batch_size: 1
   num_data_workers: 4
   prefetch_factor: 4
   dataset:
     data_path: /scratch/gpfs/GVECCHI/el2358/ace/training_data
+    infer_timestep: false
     subset:
-      step: 5
+      - 0
 optimization:
   enable_automatic_mixed_precision: false
   lr: 0.0001
