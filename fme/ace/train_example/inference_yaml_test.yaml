@@ -1,7 +1,7 @@
 experiment_dir: /scratch/gpfs/GVECCHI/el2358/ace/inference_output
-n_forward_steps: 2 #1460  #number of 6 hours, 10 yrs
+n_forward_steps: 1 #1460  #number of 6 hours, 10 yrs
 forward_steps_in_memory: 10
-checkpoint_path: /scratch/gpfs/GVECCHI/el2358/ace/train_output/training_checkpoints/best_ckpt.tar
+checkpoint_path: /scratch/gpfs/GVECCHI/el2358/ace/train_output/training_checkpoints/ckpt.tar
 logging:
   log_to_screen: true
   log_to_wandb: false
@@ -12,14 +12,13 @@ initial_condition:
     data_path: /scratch/gpfs/GVECCHI/el2358/ace/training_data/
     file_pattern: "*.nc"
   start_indices:
-    list: [100]
+      first: 100
+      n_initial_conditions: 3
+      interval: 1
 forcing_loader:
   dataset:
     data_path: /scratch/gpfs/GVECCHI/el2358/ace/training_data/
-    subset:
-      indices: 
-        - [100, 101, 102]
 data_writer:
   save_prediction_files: true
   save_monthly_files: false
-  names: ["PRESsfc","air_temperature_7"]
+  names: ["PRESsfc"]
