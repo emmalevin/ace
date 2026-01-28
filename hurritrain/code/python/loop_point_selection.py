@@ -138,9 +138,9 @@ def select_random_time_indices(
 # 3. train the models using the selected points
 
 
-def update_yaml_indices(
+def update_yaml_training_indices(
     yaml_path: str,
-    indices: list[int] | np.ndarray,
+    training_indices: list[int] | np.ndarray,
     total_time_indices: int | None = None,
 ) -> None:
     """
@@ -154,12 +154,12 @@ def update_yaml_indices(
         total_time_indices: Optional total number of time indices for validation.
     """
     # Convert numpy array to list if needed
-    if isinstance(indices, np.ndarray):
-        indices = indices.tolist()
+    if isinstance(training_indices, np.ndarray):
+        training_indices = training_indices.tolist()
     
     # Validate indices don't exceed available time
     if total_time_indices is not None:
-        max_idx = max(indices)
+        max_idx = max(training_indices)
         if max_idx >= total_time_indices:
             raise ValueError(
                 f"Index {max_idx} exceeds available time indices ({total_time_indices})"
@@ -186,8 +186,33 @@ def update_yaml_indices(
         )
     
     # Update subset with flat list of starting indices
-    config["train_loader"]["dataset"]["subset"] = indices
+    config["train_loader"]["dataset"]["subset"] = training_indices
     
+    # Write back to file
+    with open(yaml_path, "w") as f:
+        yaml.dump(config, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+
+def update_yaml_inference_indices(
+    yaml_path: str,
+    total_time_indices: int,
+) -> None:
+    # Read YAML file
+    with open(yaml_path, "r") as f:
+        config = yaml.safe_load(f)
+
+    # Check if config was loaded successfully
+    if config is None:
+        raise ValueError(f"YAML file {yaml_path} is empty or could not be parsed")
+
+    if config["initial_condition"] is None:
+        raise ValueError(f"YAML file {yaml_path} does not have 'initial_condition' section")
+    if "start_indices" not in config["initial_condition"]:
+        raise ValueError(
+            f"YAML file {yaml_path} does not have 'initial_condition.start_indices' section"
+        )
+    config["initial_condition"]["start_indices"] = total_time_indices
+
     # Write back to file
     with open(yaml_path, "w") as f:
         yaml.dump(config, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
@@ -258,8 +283,65 @@ def run_training(
     return result
 
 
+def run_inference(yaml_path: str,
+    nproc_per_node: int = 1,
+    master_port: int = 29500,
+    python_executable: str | None = None,
+) -> subprocess.CompletedProcess:
+    """
+    Run inference using the specified YAML config file.
+    
+    Args:
+        yaml_path: Path to the YAML inference config file.
+        nproc_per_node: Number of processes per node for torchrun.
+        master_port: Port for distributed inference communication (default: 29500).
+        python_executable: Path to Python executable (default: sys.executable).
+    """
+    if python_executable is None:
+        python_executable = sys.executable
+    
+    # Set environment variables for better error reporting
+    env = os.environ.copy()
+    env["WANDB_JOB_TYPE"] = "inference"
+    env["MASTER_PORT"] = str(master_port)
+    
+    # Build command
+    cmd = [
+        "torchrun",
+        f"--nproc_per_node={nproc_per_node}",
+        f"--master_port={master_port}",
+        "-m",
+        "fme.ace.inference",
+        yaml_path,
+    ]
+    
+    print(f"Running inference command: {' '.join(cmd)}")
+    # Capture both stdout and stderr to see the actual error
+    result = subprocess.run(
+        cmd,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    
+    # Print output if there was an error
+    if result.returncode != 0:
+        print(f"\n{'='*60}")
+        print(f"Inference failed with exit code {result.returncode}")
+        print(f"{'='*60}")
+        if result.stdout:
+            print("STDOUT:")
+            print(result.stdout)
+        if result.stderr:
+            print("STDERR:")
+            print(result.stderr)
+        print(f"{'='*60}\n")
+    
+    return result
+
 def main_loop(
-    n_iterations: int = 50,
+    n_iterations: int = 1,
     n_initial_indices: int = 10,
     data_path: str = "/scratch/gpfs/GVECCHI/el2358/ace/training_data",
     yaml_dir: str | None = None,
@@ -280,21 +362,26 @@ def main_loop(
         base_dir = Path(__file__).parent.parent / "yaml"
         yaml_dir = str(base_dir)
     
-    yaml_files = [
+    training_yaml_files = [
         os.path.join(yaml_dir, "model1_train_initial.yaml"),
         os.path.join(yaml_dir, "model2_train_initial.yaml"),
     ]
     
+    inference_yaml_files = [
+        os.path.join(yaml_dir, "model1_inference.yaml"),
+        os.path.join(yaml_dir, "model2_inference.yaml"),
+    ]
+
     # Before loop: Generate initial list of indices
     print(f"Generating initial list of {n_initial_indices} random time indices...")
-    selected_indices = select_random_time_indices(
+    initial_indices = select_random_time_indices(
         data_path=data_path, n=n_initial_indices, seed=seed
     )
-    print(f"Initial selected indices: {selected_indices}")
+    print(f"Initial selected indices: {initial_indices}")
     
     # Convert to list to maintain throughout iterations
-    indices_list = selected_indices.tolist()
-    
+    training_indices_list = initial_indices.tolist()
+
     # Get total time indices for validation
     pattern = os.path.join(data_path, "*.nc")
     file_paths = sorted(glob.glob(pattern))
@@ -303,32 +390,48 @@ def main_loop(
         with xr.open_dataset(file_path, decode_times=False) as ds:
             total_time_indices += len(ds.time)
     
-    # Before loop: Update YAML files with initial indices
-    print("Updating YAML files with initial indices...")
-    for yaml_file in yaml_files:
-        if not os.path.exists(yaml_file):
-            print(f"Warning: YAML file {yaml_file} does not exist, skipping...")
-            continue
-        update_yaml_indices(yaml_file, indices_list, total_time_indices)
-        print(f"Updated {yaml_file}")
+    candidate_indices_list = np.arange(total_time_indices)
+    candidate_indices_list = np.setdiff1d(candidate_indices_list, training_indices_list)
+
     
+
+    # Before loop: Update YAML files with initial indices
+    print("Updating YAML files with initial training indices...")
+    for training_yaml_file in training_yaml_files:
+        if not os.path.exists(training_yaml_file):
+            print(f"Warning: YAML file {training_yaml_file} does not exist, skipping...")
+            continue
+        update_yaml_training_indices(training_yaml_file, training_indices_list, total_time_indices)
+        print(f"Updated {training_yaml_file}")
+    
+    print("Updating YAML files with initial inference indices...")
+    for inference_yaml_file in inference_yaml_files:
+        if not os.path.exists(inference_yaml_file):
+            print(f"Warning: YAML file {inference_yaml_file} does not exist, skipping...")
+            continue
+        update_yaml_inference_indices(inference_yaml_file, total_time_indices)
+        print(f"Updated {inference_yaml_file}")
+
     # Run training with initial random points
     print("\nRunning training with initial random points...")
-    valid_yaml_files = [f for f in yaml_files if os.path.exists(f)]
+    valid_training_yaml_files = [f for f in training_yaml_files if os.path.exists(f)]
+    valid_inference_yaml_files = [f for f in inference_yaml_files if os.path.exists(f)]
     
-    if not valid_yaml_files:
+    if not valid_training_yaml_files:
         print("Warning: No valid YAML files found for training")
+    if not valid_inference_yaml_files:
+        print("Warning: No valid YAML files found for inference")
     else:
         # Assign unique ports to each training job to avoid conflicts
         base_port = 29500
         port_to_file = {
             base_port + i: yaml_file
-            for i, yaml_file in enumerate(valid_yaml_files)
+            for i, yaml_file in enumerate(valid_training_yaml_files)
         }
         
         # Run training in parallel using ThreadPoolExecutor
-        print(f"Running {len(valid_yaml_files)} training jobs in parallel...")
-        with ThreadPoolExecutor(max_workers=len(valid_yaml_files)) as executor:
+        print(f"Running {len(valid_training_yaml_files)} training jobs in parallel...")
+        with ThreadPoolExecutor(max_workers=len(valid_training_yaml_files)) as executor:
             # Submit all training tasks with unique ports
             future_to_file = {
                 executor.submit(run_training, yaml_file, 1, port): yaml_file
@@ -353,7 +456,17 @@ def main_loop(
         print(f"\n{'='*60}")
         print(f"Iteration {iteration + 1}/{n_iterations}")
         print(f"{'='*60}")
-        print(f"Current indices list: {indices_list}")
+        print(f"Current indices list: {training_indices_list}")
+
+        # run inference on all points
+        print("Running inference on all points...")
+        for inference_yaml_file in valid_inference_yaml_files:
+            run_inference(inference_yaml_file, 1, base_port + len(valid_training_yaml_files))
+            print(f"Inference with {inference_yaml_file} completed successfully")
+
+        
+
+        # compute the acquisition function for each candidate point
         
         # TODO: User will modify the rest of the loop
         # - Run inference on candidate points
