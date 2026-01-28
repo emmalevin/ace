@@ -414,7 +414,8 @@ def main_loop(
         if not os.path.exists(inference_yaml_file):
             print(f"Warning: YAML file {inference_yaml_file} does not exist, skipping...")
             continue
-        update_yaml_inference_indices(inference_yaml_file, total_time_indices-1)
+        #update_yaml_inference_indices(inference_yaml_file, total_time_indices-1)
+        update_yaml_inference_indices(inference_yaml_file, 10)
         print(f"Updated {inference_yaml_file}")
 
     # Run training with initial random points
@@ -465,11 +466,11 @@ def main_loop(
 
         # run inference on all points
         print("Running inference on all points...")
-        # for inference_yaml_file in valid_inference_yaml_files:
-        #     run_inference(inference_yaml_file, 1, base_port + len(valid_training_yaml_files))
-        #     print(f"Inference with {inference_yaml_file} completed successfully")
+        for inference_yaml_file in valid_inference_yaml_files:
+            run_inference(inference_yaml_file, 1, base_port + len(valid_training_yaml_files))
+            print(f"Inference with {inference_yaml_file} completed successfully")
 
-        run_inference(valid_inference_yaml_files[0], 1, base_port + len(valid_training_yaml_files))
+        #run_inference(valid_inference_yaml_files[0], 1, base_port + len(valid_training_yaml_files))
 
         # compute the acquisition function for each candidate point
         
@@ -538,7 +539,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--seed",
         type=int,
-        default=None,
+        default=42,
         help="Random seed for initial index selection (optional)",
     )
     
