@@ -161,12 +161,12 @@ def update_yaml_training_indices(
         training_indices = training_indices.tolist()
     
     # Validate indices don't exceed available time
-    if total_time_indices is not None:
-        max_idx = max(training_indices)
-        if max_idx >= total_time_indices:
-            raise ValueError(
-                f"Index {max_idx} exceeds available time indices ({total_time_indices})"
-            )
+    # if total_time_indices is not None:
+    #     max_idx = max(training_indices)
+    #     if max_idx >= total_time_indices:
+    #         raise ValueError(
+    #             f"Index {max_idx} exceeds available time indices ({total_time_indices})"
+    #         )
     
     # Read YAML file
     with open(yaml_path, "r") as f:
@@ -448,11 +448,14 @@ def main_loop(
     for file_path in file_paths:
         with xr.open_dataset(file_path, decode_times=False) as ds:
             total_time_indices += len(ds.time)
-    
-    candidate_indices_list = np.arange(total_time_indices)
-    candidate_indices_list = np.setdiff1d(candidate_indices_list, training_indices_list)
 
-    
+
+    #TEMPORARY
+    total_time_indices = 10
+
+    # Make candidate indices list
+    candidate_indices_list = np.arange(total_time_indices-1)
+    candidate_indices_list = np.setdiff1d(candidate_indices_list, training_indices_list)
 
     # Before loop: Update YAML files with initial indices
     print("Updating YAML files with initial training indices...")
@@ -468,8 +471,7 @@ def main_loop(
         if not os.path.exists(inference_yaml_file):
             print(f"Warning: YAML file {inference_yaml_file} does not exist, skipping...")
             continue
-        #update_yaml_inference_indices(inference_yaml_file, total_time_indices-1)
-        update_yaml_inference_indices(inference_yaml_file, 10)
+        update_yaml_inference_indices(inference_yaml_file, total_time_indices-1)
         print(f"Updated {inference_yaml_file}")
 
     # Run training with initial random points
@@ -510,6 +512,10 @@ def main_loop(
                 except Exception as exc:
                     print(f"Training with {yaml_file} generated an exception: {exc}")
     
+
+    
+
+
     # Main loop
     print(f"\nStarting main loop with {n_iterations} iterations...")
     for iteration in range(n_iterations):
