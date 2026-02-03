@@ -345,6 +345,60 @@ def run_inference(yaml_path: str,
     
     return result
 
+
+def compute_min_pressure_variance_and_top_sample_indices(
+    prediction_paths: Sequence[str],
+    candidate_indices_list: np.ndarray | list[int],
+    variable: str = "PRESsfc",
+    lat_min: float = 22.0,
+    lat_max: float = 29.0,
+    lon_min: float = 263.0,
+    lon_max: float = 277.0,
+    n_top: int = 2,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Open autoregressive_predictions.nc from each model, compute min surface
+    pressure in the Gulf lat/lon box per sample, then variance across models
+    per sample; return the n_top sample indices with highest variance.
+
+    Uses the same Gulf box as py_y (lat 22--29 N, lon 97--83 W in 0--360).
+
+    Args:
+        prediction_paths: Paths to autoregressive_predictions.nc (one per model).
+        variable: Variable name (default PRESsfc).
+        lat_min, lat_max, lon_min, lon_max: Gulf box in degrees (defaults from py_y).
+        n_top: Number of sample indices to return with highest variance (default 2).
+
+    Returns:
+        sample_indices: 1D array of length n_top (sample indices with highest variance).
+        variances: 1D array of variance per sample (same length as sample dimension).
+    """
+    if len(prediction_paths) < 2:
+        raise ValueError("Need at least 2 prediction files to compute variance across models")
+    min_pressure_per_model = []
+    for path in prediction_paths:
+        with xr.open_dataset(path, decode_times=False) as ds:
+            var = ds[variable]
+            # Select Gulf box (same as py_y)
+            box = var.sel(
+                lat=slice(lat_min, lat_max),
+                lon=slice(lon_min, lon_max),
+            )
+            # Min over lat, lon, and time -> one value per sample (first dim is sample)
+            sample_dim = box.dims[0]
+            min_per_sample = box.min(dim=[d for d in box.dims if d != sample_dim])
+            min_pressure_per_model.append(min_per_sample.values)
+    # Stack: (n_samples, n_models)
+    stacked = np.stack(min_pressure_per_model, axis=-1)
+    # Variance across models for each sample (axis=-1)
+    variances = np.var(stacked, axis=-1)
+    # Map variances back to candidate indices
+    variances = variances[candidate_indices_list]
+    # Indices of n_top largest variances
+    top_indices = np.argsort(variances)[-n_top:][::-1]
+    return candidate_indices_list[top_indices], variances[top_indices]
+
+
 def main_loop(
     n_iterations: int = 1,
     n_initial_indices: int = 10,
@@ -470,18 +524,84 @@ def main_loop(
             run_inference(inference_yaml_file, 1, base_port + len(valid_training_yaml_files))
             print(f"Inference with {inference_yaml_file} completed successfully")
 
-        #run_inference(valid_inference_yaml_files[0], 1, base_port + len(valid_training_yaml_files))
+        # Open inference outputs and compute acquisition (variance of min PRES in Gulf)
+        inference_output_dir = Path(__file__).parent.parent.parent / "inference_output"
+        prediction_paths = [
+            str(inference_output_dir / "model1_inference" / "autoregressive_predictions.nc"),
+            str(inference_output_dir / "model2_inference" / "autoregressive_predictions.nc"),
+        ]
+        if all(os.path.exists(p) for p in prediction_paths):
+            top_sample_indices, variances = compute_min_pressure_variance_and_top_sample_indices(
+                prediction_paths,
+                candidate_indices_list,
+                variable="PRESsfc",
+                lat_min=22.0,
+                lat_max=29.0,
+                lon_min=263.0,
+                lon_max=277.0,
+                n_top=2,
+            )
+            # Keep list of the 2 sample indices with highest variance (this iteration)
+            high_variance_sample_indices = top_sample_indices.tolist()
+            print(f"Sample indices with 2 highest variances (min PRES Gulf): {high_variance_sample_indices}")
+        else:
+            high_variance_sample_indices = []
+            print("Warning: one or both autoregressive_predictions.nc missing; skipping acquisition.")
 
-        # compute the acquisition function for each candidate point
-        
-        # TODO: User will modify the rest of the loop
-        # - Compute acquisition function
-        # - Select points with highest acquisition function
-        # - Add selected points to indices_list
-        # - Update YAML files with new indices_list
-        pass
+        # TODO: User may add: map high_variance_sample_indices to time indices, add to
+        # training_indices_list, update YAML files, and optionally run training again.
+        training_indices_list.extend(high_variance_sample_indices)
+        candidate_indices_list = np.setdiff1d(candidate_indices_list, high_variance_sample_indices)
 
+        print(f"Updated training indices list: {training_indices_list}")
+        for training_yaml_file in training_yaml_files:
+            if not os.path.exists(training_yaml_file):
+                print(f"Warning: YAML file {training_yaml_file} does not exist, skipping...")
+                continue
+            update_yaml_training_indices(training_yaml_file, training_indices_list, total_time_indices)
+            print(f"Updated {training_yaml_file}")
 
+        # Run training with new indices
+        print("\nRunning training with new indices...")
+        valid_training_yaml_files = [f for f in training_yaml_files if os.path.exists(f)]
+        if not valid_training_yaml_files:
+            print("Warning: No valid YAML files found for training")
+        else:
+            # Assign unique ports to each training job to avoid conflicts
+            base_port = 29500
+            port_to_file = {
+                base_port + i: yaml_file
+                for i, yaml_file in enumerate(valid_training_yaml_files)
+            }
+            
+            # Run training in parallel using ThreadPoolExecutor
+            print(f"Running {len(valid_training_yaml_files)} training jobs in parallel...")
+            with ThreadPoolExecutor(max_workers=len(valid_training_yaml_files)) as executor:
+                # Submit all training tasks with unique ports
+                future_to_file = {
+                    executor.submit(run_training, yaml_file, 1, port): yaml_file
+                    for port, yaml_file in port_to_file.items()
+                }
+                
+                # Wait for all tasks to complete and collect results
+                for future in as_completed(future_to_file):
+                    yaml_file = future_to_file[future]
+                    try:
+                        result = future.result()
+                        if result.returncode != 0:
+                            print(f"Warning: Training with {yaml_file} exited with code {result.returncode}")
+                        else:
+                            print(f"Training with {yaml_file} completed successfully")
+                    except Exception as exc:
+                        print(f"Training with {yaml_file} generated an exception: {exc}")
+
+        # Main loop end
+        print(f"\n{'='*60}")
+        print(f"Iteration {iteration + 1}/{n_iterations} completed")
+        print(f"{'='*60}")
+        print(f"Current training indices list: {training_indices_list}")
+        print(f"Current candidate indices list: {candidate_indices_list}")
+        print(f"{'='*60}\n")
 
 # 4. run inference on each point then compute the acquisition function for each candidate point 
 # 5. select the point(s) with the highest acquisition function
@@ -515,13 +635,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--n_iterations",
         type=int,
-        default=1,
+        default=3,
         help="Number of iterations to run (default: 50)",
     )
     parser.add_argument(
         "--n_initial_indices",
         type=int,
-        default=10,
+        default=2,
         help="Number of initial random indices to select (default: 10)",
     )
     parser.add_argument(
