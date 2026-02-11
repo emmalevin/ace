@@ -15,7 +15,7 @@ from index_selection import select_random_time_indices
 from inference_runner import run_inference
 from probability_data import load_probability_data
 from training import run_training_parallel
-from yaml_utils import update_yaml_inference_indices, update_yaml_training_indices
+from yaml_utils import update_yaml_training_indices, write_inference_batch_yamls
 
 torch.cuda.empty_cache()
 
@@ -52,6 +52,7 @@ def main_loop(
         os.path.join(yaml_dir, "model2_train_initial.yaml"),
     ]
     
+    # Single-file inference YAMLs (kept for reference; batch YAMLs are used instead)
     inference_yaml_files = [
         os.path.join(yaml_dir, "model1_inference.yaml"),
         os.path.join(yaml_dir, "model2_inference.yaml"),
@@ -75,9 +76,11 @@ def main_loop(
         with xr.open_dataset(file_path, decode_times=False) as ds:
             total_time_indices += len(ds.time)
 
-
-    #TEMPORARY
-    total_time_indices = 10
+    # Write batched inference YAMLs (10 initial conditions per file per model)
+    inference_batch_model1, inference_batch_model2 = write_inference_batch_yamls(
+        total_time_indices, yaml_dir, batch_size=10
+    )
+    print(f"Wrote {len(inference_batch_model1)} batch inference YAMLs for model1 and {len(inference_batch_model2)} for model2.")
 
     # Make candidate indices list
     candidate_indices_list = np.arange(total_time_indices-1)
@@ -91,14 +94,6 @@ def main_loop(
             continue
         update_yaml_training_indices(training_yaml_file, training_indices_list, total_time_indices)
         print(f"Updated {training_yaml_file}")
-    
-    print("Updating YAML files with initial inference indices...")
-    for inference_yaml_file in inference_yaml_files:
-        if not os.path.exists(inference_yaml_file):
-            print(f"Warning: YAML file {inference_yaml_file} does not exist, skipping...")
-            continue
-        update_yaml_inference_indices(inference_yaml_file, total_time_indices-1)
-        print(f"Updated {inference_yaml_file}")
 
     # Run training with initial random points
     print("\nRunning training with initial random points...")
