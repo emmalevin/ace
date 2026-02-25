@@ -10,9 +10,12 @@ import numpy as np
 import torch
 import xarray as xr
 
-from acquisition import compute_min_pressure_variance_and_top_sample_indices
+from acquisition import (
+    compute_min_pressure_variance_and_top_sample_indices,
+    compute_min_pressure_variance_and_top_sample_indices_batched,
+)
 from index_selection import select_random_time_indices
-from inference_runner import run_inference
+from inference_runner import run_inference, submit_batched_inference_jobs
 from probability_data import load_probability_data
 from training import run_training_parallel
 from yaml_utils import update_yaml_training_indices, write_inference_batch_yamls
@@ -76,6 +79,10 @@ def main_loop(
         with xr.open_dataset(file_path, decode_times=False) as ds:
             total_time_indices += len(ds.time)
 
+    # ---- FIX LATER -----
+    # change total indices to 100 as a test
+    total_time_indices = 100
+
     # Write batched inference YAMLs (10 initial conditions per file per model)
     inference_batch_model1, inference_batch_model2 = write_inference_batch_yamls(
         total_time_indices, yaml_dir, batch_size=10
@@ -120,36 +127,54 @@ def main_loop(
         print(f"{'='*60}")
         print(f"Current indices list: {training_indices_list}")
 
-        # run inference on all points
-        print("Running inference on all points...")
-        for inference_yaml_file in valid_inference_yaml_files:
-            run_inference(inference_yaml_file, 1, base_port + len(valid_training_yaml_files))
-            print(f"Inference with {inference_yaml_file} completed successfully")
-
-        # Open inference outputs and compute acquisition (variance of min PRES in Gulf)
-        inference_output_dir = Path(__file__).parent.parent.parent / "inference_output"
-        prediction_paths = [
-            str(inference_output_dir / "model1_inference" / "autoregressive_predictions.nc"),
-            str(inference_output_dir / "model2_inference" / "autoregressive_predictions.nc"),
-        ]
-        if all(os.path.exists(p) for p in prediction_paths):
-            top_candidate_indices, acquisition = compute_min_pressure_variance_and_top_sample_indices(
-                prediction_paths,
-                candidate_indices_list,
-                py_kde,
-                variable="PRESsfc",
-                lat_min=22.0,
-                lat_max=29.0,
-                lon_min=263.0,
-                lon_max=277.0,
-                n_top=2,
+        # Batched inference: submit model1 and model2 SLURM array jobs (run in parallel)
+        shell_dir = Path(__file__).parent.parent / "shell"
+        model1_batched_script = shell_dir / "model1_batched_array_inference.sh"
+        model2_batched_script = shell_dir / "model2_batched_array_inference.sh"
+        if not model1_batched_script.exists() or not model2_batched_script.exists():
+            print("Warning: Batched inference scripts not found; skipping inference.")
+        else:
+            print("Submitting batched inference jobs (model1 and model2) in parallel...")
+            submit_batched_inference_jobs(
+                str(model1_batched_script),
+                str(model2_batched_script),
+                wait=True,
             )
-            # Keep list of the 2 candidate (time) indices with highest acquisition (this iteration)
-            high_variance_sample_indices = top_candidate_indices.tolist()
-            print(f"Candidate indices with 2 highest acquisition (variance * 1/py_kde): {high_variance_sample_indices}")
+            print("Batched inference jobs finished.")
+
+        # Compute acquisition from batched inference outputs (model1_*, model2_* folders)
+        inference_output_dir = Path(__file__).parent.parent.parent / "inference_output"
+        model1_base = inference_output_dir / "model1_inference_folders"
+        model2_base = inference_output_dir / "model2_inference_folders"
+        # Check that at least one batch folder exists for each model
+        has_model1 = model1_base.exists() and any(
+            d.name.startswith("model1_") and d.is_dir()
+            for d in model1_base.iterdir()
+        )
+        has_model2 = model2_base.exists() and any(
+            d.name.startswith("model2_") and d.is_dir()
+            for d in model2_base.iterdir()
+        )
+        if has_model1 and has_model2:
+            try:
+                top_candidate_indices, acquisition = compute_min_pressure_variance_and_top_sample_indices_batched(
+                    inference_output_dir=str(inference_output_dir),
+                    py_kde=py_kde,
+                    variable="PRESsfc",
+                    lat_min=22.0,
+                    lat_max=29.0,
+                    lon_min=263.0,
+                    lon_max=277.0,
+                    n_top=2,
+                )
+                high_variance_sample_indices = top_candidate_indices.tolist()
+                print(f"Candidate indices with 2 highest acquisition (batched): {high_variance_sample_indices}")
+            except Exception as e:
+                high_variance_sample_indices = []
+                print(f"Warning: Batched acquisition failed: {e}")
         else:
             high_variance_sample_indices = []
-            print("Warning: one or both autoregressive_predictions.nc missing; skipping acquisition.")
+            print("Warning: Batched inference folders missing; skipping acquisition.")
 
         # TODO: User may add: map high_variance_sample_indices to time indices, add to
         # training_indices_list, update YAML files, and optionally run training again.

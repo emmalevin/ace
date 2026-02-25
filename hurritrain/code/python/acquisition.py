@@ -12,7 +12,7 @@ import xarray as xr
 from scipy.stats import gaussian_kde
 
 # Default paths for batched inference outputs and px array
-_DEFAULT_INFERENCE_FOLDERS_BASE = "/scratch/gpfs/GVECCHI/el2358/ace/hurritrain/inference_output/model1_inference_folders"
+_DEFAULT_INFERENCE_OUTPUT_DIR = "/scratch/gpfs/GVECCHI/el2358/ace/hurritrain/inference_output"
 _DEFAULT_PX_PATH = "/scratch/gpfs/GVECCHI/el2358/ace/hurritrain/probability_data/kde_pdf_values_h500_1940.npy"
 
 
@@ -97,7 +97,12 @@ def _min_pressure_per_time_from_folders(
     lon_min: float,
     lon_max: float,
 ) -> np.ndarray:
-    """Open autoregressive_predictions.nc in each folder, extract min PRES in box per sample, concatenate."""
+    """
+    Open autoregressive_predictions.nc in each folder; extract min PRES in Gulf box
+    per sample (sample dim first, e.g. PRESsfc(sample, time, lat, lon)); concatenate
+    along sample dimension across all folders so that e.g. model1_0 gives points 0-9,
+    model1_10 gives 10-19, etc.
+    """
     all_min = []
     for folder in folder_paths:
         nc_path = os.path.join(folder, "autoregressive_predictions.nc")
@@ -109,14 +114,15 @@ def _min_pressure_per_time_from_folders(
                 lat=slice(lat_min, lat_max),
                 lon=slice(lon_min, lon_max),
             )
+            # First dim is sample (e.g. 10 per batch); reduce over time, lat, lon
             sample_dim = box.dims[0]
             min_per_sample = box.min(dim=[d for d in box.dims if d != sample_dim])
-            all_min.append(min_per_sample.values)
+            all_min.append(np.asarray(min_per_sample.values).ravel())
     return np.concatenate(all_min, axis=0)
 
 
 def compute_min_pressure_variance_and_top_sample_indices_batched(
-    inference_folders_base: str = _DEFAULT_INFERENCE_FOLDERS_BASE,
+    inference_output_dir: str = _DEFAULT_INFERENCE_OUTPUT_DIR,
     py_kde: gaussian_kde | None = None,
     px_path: str = _DEFAULT_PX_PATH,
     variable: str = "PRESsfc",
@@ -128,20 +134,24 @@ def compute_min_pressure_variance_and_top_sample_indices_batched(
     kde_eps: float = 1e-10,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
-    For each model, load autoregressive_predictions.nc from model1_* and model2_* subdirs,
-    concatenate min surface pressure in the Gulf box across all time indices. Compute
-    acquisition = var * inv_py_kde * px at each time index; return top n_top time indices.
+    For each model, load autoregressive_predictions.nc from batched subdirs
+    (model1_inference_folders/model1_0, model1_10, ... and model2_inference_folders/model2_0, ...),
+    concatenate min surface pressure in the Gulf box along the sample dimension across all
+    batches. Compute acquisition = var * inv_py_kde * px at each time index; return top
+    n_top time indices.
 
-    Uses the same Gulf box as py_y (lat 22--29 N, lon 97--83 W in 0--360).
+    inference_output_dir: path to the dir containing model1_inference_folders and model2_inference_folders.
     """
     if py_kde is None:
         raise ValueError("py_kde is required")
 
-    folders1 = _sorted_model_folders(inference_folders_base, "model1")
-    folders2 = _sorted_model_folders(inference_folders_base, "model2")
+    model1_base = os.path.join(inference_output_dir, "model1_inference_folders")
+    model2_base = os.path.join(inference_output_dir, "model2_inference_folders")
+    folders1 = _sorted_model_folders(model1_base, "model1")
+    folders2 = _sorted_model_folders(model2_base, "model2")
     if not folders1 or not folders2:
         raise ValueError(
-            f"No model1_* or model2_* folders found under {inference_folders_base}"
+            f"No model1_* folders in {model1_base} or no model2_* in {model2_base}"
         )
 
     min_pressure_model1 = _min_pressure_per_time_from_folders(
