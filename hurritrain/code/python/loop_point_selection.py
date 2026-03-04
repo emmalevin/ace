@@ -18,7 +18,10 @@ from index_selection import select_random_time_indices
 from inference_runner import run_inference, submit_batched_inference_jobs
 from probability_data import load_probability_data
 from training import run_training_parallel
-from yaml_utils import update_yaml_training_indices, write_inference_batch_yamls
+from yaml_utils import (
+    update_fast_inference_indices_for_both,
+    update_yaml_training_indices,
+)
 
 torch.cuda.empty_cache()
 
@@ -55,10 +58,10 @@ def main_loop(
         os.path.join(yaml_dir, "model2_train_initial.yaml"),
     ]
     
-    # Single-file inference YAMLs (kept for reference; batch YAMLs are used instead)
-    inference_yaml_files = [
-        os.path.join(yaml_dir, "model1_inference.yaml"),
-        os.path.join(yaml_dir, "model2_inference.yaml"),
+    # Fast-inference YAMLs (one per model; start_indices updated once before loop)
+    fast_inference_yaml_files = [
+        os.path.join(yaml_dir, "model1_fast_inference.yaml"),
+        os.path.join(yaml_dir, "model2_fast_inference.yaml"),
     ]
 
     # Before loop: Generate initial list of indices
@@ -83,11 +86,13 @@ def main_loop(
     # change total indices to 100 as a test
     total_time_indices = 100
 
-    # Write batched inference YAMLs (10 initial conditions per file per model)
-    inference_batch_model1, inference_batch_model2 = write_inference_batch_yamls(
-        total_time_indices, yaml_dir, batch_size=10
+    # Update fast-inference YAMLs with start_indices [0, 1, ..., total_time_indices-1]
+    update_fast_inference_indices_for_both(
+        fast_inference_yaml_files[0],
+        fast_inference_yaml_files[1],
+        total_time_indices,
     )
-    print(f"Wrote {len(inference_batch_model1)} batch inference YAMLs for model1 and {len(inference_batch_model2)} for model2.")
+    print(f"Updated fast-inference YAMLs with {total_time_indices} start indices.")
 
     # Make candidate indices list
     candidate_indices_list = np.arange(total_time_indices-1)
@@ -105,7 +110,7 @@ def main_loop(
     # Run training with initial random points
     print("\nRunning training with initial random points...")
     valid_training_yaml_files = [f for f in training_yaml_files if os.path.exists(f)]
-    valid_inference_yaml_files = [f for f in inference_yaml_files if os.path.exists(f)]
+    valid_inference_yaml_files = [f for f in fast_inference_yaml_files if os.path.exists(f)]
     
     if not valid_training_yaml_files:
         print("Warning: No valid YAML files found for training")
@@ -127,35 +132,28 @@ def main_loop(
         print(f"{'='*60}")
         print(f"Current indices list: {training_indices_list}")
 
-        # Batched inference: submit model1 and model2 SLURM array jobs (run in parallel)
+        # Run inference: submit model1 and model2 fast-inference SLURM jobs in parallel
         shell_dir = Path(__file__).parent.parent / "shell"
-        model1_batched_script = shell_dir / "model1_batched_array_inference.sh"
-        model2_batched_script = shell_dir / "model2_batched_array_inference.sh"
-        if not model1_batched_script.exists() or not model2_batched_script.exists():
-            print("Warning: Batched inference scripts not found; skipping inference.")
+        model1_script = shell_dir / "model1_batch_fast_inference.sh"
+        model2_script = shell_dir / "model2_batch_fast_inference.sh"
+        if not model1_script.exists() or not model2_script.exists():
+            print("Warning: Fast inference scripts not found; skipping inference.")
         else:
-            print("Submitting batched inference jobs (model1 and model2) in parallel...")
+            print("Submitting fast inference jobs (model1 and model2) in parallel...")
             submit_batched_inference_jobs(
-                str(model1_batched_script),
-                str(model2_batched_script),
+                str(model1_script),
+                str(model2_script),
                 wait=True,
             )
-            print("Batched inference jobs finished.")
+            print("Fast inference jobs finished.")
 
-        # Compute acquisition from batched inference outputs (model1_*, model2_* folders)
+        # Compute acquisition from inference zarr outputs (one zarr per model)
         inference_output_dir = Path(__file__).parent.parent.parent / "inference_output"
-        model1_base = inference_output_dir / "model1_inference_folders"
-        model2_base = inference_output_dir / "model2_inference_folders"
-        # Check that at least one batch folder exists for each model
-        has_model1 = model1_base.exists() and any(
-            d.name.startswith("model1_") and d.is_dir()
-            for d in model1_base.iterdir()
-        )
-        has_model2 = model2_base.exists() and any(
-            d.name.startswith("model2_") and d.is_dir()
-            for d in model2_base.iterdir()
-        )
-        if has_model1 and has_model2:
+        zarr1 = inference_output_dir / "model1_inference" / "autoregressive_predictions.zarr"
+        zarr2 = inference_output_dir / "model2_inference" / "autoregressive_predictions.zarr"
+        has_zarr1 = zarr1.is_dir()
+        has_zarr2 = zarr2.is_dir()
+        if has_zarr1 and has_zarr2:
             try:
                 top_candidate_indices, acquisition = compute_min_pressure_variance_and_top_sample_indices_batched(
                     inference_output_dir=str(inference_output_dir),
@@ -168,13 +166,13 @@ def main_loop(
                     n_top=2,
                 )
                 high_variance_sample_indices = top_candidate_indices.tolist()
-                print(f"Candidate indices with 2 highest acquisition (batched): {high_variance_sample_indices}")
+                print(f"Candidate indices with 2 highest acquisition (zarr): {high_variance_sample_indices}")
             except Exception as e:
                 high_variance_sample_indices = []
-                print(f"Warning: Batched acquisition failed: {e}")
+                print(f"Warning: Acquisition from zarr failed: {e}")
         else:
             high_variance_sample_indices = []
-            print("Warning: Batched inference folders missing; skipping acquisition.")
+            print("Warning: Inference zarr stores missing (model1_inference/ and model2_inference/autoregressive_predictions.zarr); skipping acquisition.")
 
         # TODO: User may add: map high_variance_sample_indices to time indices, add to
         # training_indices_list, update YAML files, and optionally run training again.

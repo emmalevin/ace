@@ -78,6 +78,37 @@ def update_yaml_inference_indices(
         yaml.dump(config, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
 
+def update_fast_inference_start_indices(yaml_path: str, n_indices: int) -> None:
+    """
+    Update base_evaluator_config.loader.start_indices.list in a fast-inference
+    evaluator YAML to [0, 1, ..., n_indices-1].
+    """
+    with open(yaml_path, "r") as f:
+        config = yaml.safe_load(f)
+    if config is None:
+        raise ValueError(f"YAML file {yaml_path} is empty or could not be parsed")
+    if "base_evaluator_config" not in config:
+        raise ValueError(f"YAML file {yaml_path} does not have 'base_evaluator_config'")
+    be = config["base_evaluator_config"]
+    if "loader" not in be or "start_indices" not in be["loader"]:
+        raise ValueError(
+            f"YAML file {yaml_path} does not have base_evaluator_config.loader.start_indices"
+        )
+    be["loader"]["start_indices"]["list"] = list(range(n_indices))
+    with open(yaml_path, "w") as f:
+        yaml.dump(config, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+
+def update_fast_inference_indices_for_both(
+    model1_yaml_path: str,
+    model2_yaml_path: str,
+    n_indices: int,
+) -> None:
+    """Update both fast-inference YAMLs with start_indices list [0, 1, ..., n_indices-1]."""
+    update_fast_inference_start_indices(model1_yaml_path, n_indices)
+    update_fast_inference_start_indices(model2_yaml_path, n_indices)
+
+
 # Base paths for batch inference YAMLs (same as template inference YAMLs)
 _DEFAULT_DATA_PATH = "/scratch/gpfs/GVECCHI/el2358/ace/training_data/"
 _MODEL1_CKPT = "/scratch/gpfs/GVECCHI/el2358/ace/hurritrain/training_output/model1_wandb/training_checkpoints/ckpt.tar"

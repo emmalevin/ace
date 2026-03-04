@@ -2,16 +2,14 @@
 Acquisition function: variance of min pressure in Gulf × (1 / py_kde) × px.
 """
 
-import glob
 import os
-import re
 from typing import Sequence
 
 import numpy as np
 import xarray as xr
 from scipy.stats import gaussian_kde
 
-# Default paths for batched inference outputs and px array
+# Default paths for inference outputs (zarr) and px array
 _DEFAULT_INFERENCE_OUTPUT_DIR = "/scratch/gpfs/GVECCHI/el2358/ace/hurritrain/inference_output"
 _DEFAULT_PX_PATH = "/scratch/gpfs/GVECCHI/el2358/ace/hurritrain/probability_data/kde_pdf_values_h500_1940.npy"
 
@@ -75,50 +73,34 @@ def compute_min_pressure_variance_and_top_sample_indices(
     candidate_arr = np.asarray(candidate_indices_list)
     return candidate_arr[top_sample_indices], acquisition
 
-def _sorted_model_folders(base_path: str, prefix: str) -> list[str]:
-    """List subdirs base_path/prefix_* and sort by numeric suffix (e.g. model1_0, model1_10 -> 0, 10)."""
-    pattern = os.path.join(base_path, f"{prefix}_*")
-    dirs = glob.glob(pattern)
-    dirs = [d for d in dirs if os.path.isdir(d)]
-    def key(p: str) -> int:
-        name = os.path.basename(p)
-        m = re.match(rf"{re.escape(prefix)}_(\d+)", name)
-        if m is None:
-            return -1
-        return int(m.group(1))
-    return sorted(dirs, key=key)
 
-
-def _min_pressure_per_time_from_folders(
-    folder_paths: list[str],
+def _min_pressure_per_sample_from_zarr(
+    zarr_path: str,
     variable: str,
     lat_min: float,
     lat_max: float,
     lon_min: float,
     lon_max: float,
+    time_index: int = 1,
 ) -> np.ndarray:
     """
-    Open autoregressive_predictions.nc in each folder; extract min PRES in Gulf box
-    per sample (sample dim first, e.g. PRESsfc(sample, time, lat, lon)); concatenate
-    along sample dimension across all folders so that e.g. model1_0 gives points 0-9,
-    model1_10 gives 10-19, etc.
+    Open autoregressive_predictions.zarr; select Gulf box, use time step time_index (default 1),
+    then min over lat and lon to get one value per sample. Returns 1D array of shape (n_sample,).
     """
-    all_min = []
-    for folder in folder_paths:
-        nc_path = os.path.join(folder, "autoregressive_predictions.nc")
-        if not os.path.exists(nc_path):
-            raise FileNotFoundError(f"Missing {nc_path}")
-        with xr.open_dataset(nc_path, decode_times=False) as ds:
-            var = ds[variable]
-            box = var.sel(
-                lat=slice(lat_min, lat_max),
-                lon=slice(lon_min, lon_max),
-            )
-            # First dim is sample (e.g. 10 per batch); reduce over time, lat, lon
-            sample_dim = box.dims[0]
-            min_per_sample = box.min(dim=[d for d in box.dims if d != sample_dim])
-            all_min.append(np.asarray(min_per_sample.values).ravel())
-    return np.concatenate(all_min, axis=0)
+    ds = xr.open_zarr(zarr_path)
+    var = ds[variable]
+    box = var.sel(
+        lat=slice(lat_min, lat_max),
+        lon=slice(lon_min, lon_max),
+    )
+    if "time" in box.dims:
+        box = box.isel(time=time_index)
+    # First dim is sample; min over remaining dims (e.g. lat, lon)
+    sample_dim = box.dims[0]
+    min_per_sample = box.min(dim=[d for d in box.dims if d != sample_dim])
+    out = np.asarray(min_per_sample.values).ravel()
+    ds.close()
+    return out
 
 
 def compute_min_pressure_variance_and_top_sample_indices_batched(
@@ -130,52 +112,49 @@ def compute_min_pressure_variance_and_top_sample_indices_batched(
     lat_max: float = 29.0,
     lon_min: float = 263.0,
     lon_max: float = 277.0,
+    time_index: int = 1,
     n_top: int = 2,
     kde_eps: float = 1e-10,
 ) -> tuple[np.ndarray, np.ndarray]:
     """
-    For each model, load autoregressive_predictions.nc from batched subdirs
-    (model1_inference_folders/model1_0, model1_10, ... and model2_inference_folders/model2_0, ...),
-    concatenate min surface pressure in the Gulf box along the sample dimension across all
-    batches. Compute acquisition = var * inv_py_kde * px at each time index; return top
-    n_top time indices.
+    Load one zarr per model (autoregressive_predictions.zarr in model1_inference and
+    model2_inference). Dimensions (sample, time, lat, lon); use time step time_index (default 1).
+    Compute min surface pressure in Gulf box per sample, then acquisition = var * inv_py_kde * px;
+    return top n_top sample indices.
 
-    inference_output_dir: path to the dir containing model1_inference_folders and model2_inference_folders.
+    inference_output_dir: path containing model1_inference/ and model2_inference/.
     """
     if py_kde is None:
         raise ValueError("py_kde is required")
 
-    model1_base = os.path.join(inference_output_dir, "model1_inference_folders")
-    model2_base = os.path.join(inference_output_dir, "model2_inference_folders")
-    folders1 = _sorted_model_folders(model1_base, "model1")
-    folders2 = _sorted_model_folders(model2_base, "model2")
-    if not folders1 or not folders2:
+    zarr1 = os.path.join(inference_output_dir, "model1_inference", "autoregressive_predictions.zarr")
+    zarr2 = os.path.join(inference_output_dir, "model2_inference", "autoregressive_predictions.zarr")
+    if not os.path.isdir(zarr1):
+        raise FileNotFoundError(f"Zarr not found: {zarr1}")
+    if not os.path.isdir(zarr2):
+        raise FileNotFoundError(f"Zarr not found: {zarr2}")
+
+    min_pressure_model1 = _min_pressure_per_sample_from_zarr(
+        zarr1, variable, lat_min, lat_max, lon_min, lon_max, time_index=time_index
+    )
+    min_pressure_model2 = _min_pressure_per_sample_from_zarr(
+        zarr2, variable, lat_min, lat_max, lon_min, lon_max, time_index=time_index
+    )
+    n_sample = len(min_pressure_model1)
+    if len(min_pressure_model2) != n_sample:
         raise ValueError(
-            f"No model1_* folders in {model1_base} or no model2_* in {model2_base}"
+            f"Model1 and model2 have different sample sizes: {n_sample} vs {len(min_pressure_model2)}"
         )
 
-    min_pressure_model1 = _min_pressure_per_time_from_folders(
-        folders1, variable, lat_min, lat_max, lon_min, lon_max
-    )
-    min_pressure_model2 = _min_pressure_per_time_from_folders(
-        folders2, variable, lat_min, lat_max, lon_min, lon_max
-    )
-    n_time = len(min_pressure_model1)
-    if len(min_pressure_model2) != n_time:
-        raise ValueError(
-            f"Model1 and model2 have different lengths: {n_time} vs {len(min_pressure_model2)}"
-        )
-
-    time_indices = np.arange(n_time)
+    sample_indices = np.arange(n_sample)
     px = np.load(px_path).squeeze()
-    if px.size != n_time:
+    if px.size != n_sample:
         raise ValueError(
-            f"px length {px.size} does not match number of time indices {n_time}"
+            f"px length {px.size} does not match number of samples {n_sample}"
         )
     if px.ndim > 1:
-        px = px.ravel()[:n_time]
+        px = px.ravel()[:n_sample]
 
-    # Variance across the two models at each time index
     variances = np.var(
         np.stack([min_pressure_model1, min_pressure_model2], axis=-1), axis=-1
     )
@@ -189,4 +168,4 @@ def compute_min_pressure_variance_and_top_sample_indices_batched(
     acquisition = variances * inv_py_kde * px
 
     top_sample_indices = np.argsort(acquisition)[-n_top:][::-1]
-    return time_indices[top_sample_indices], acquisition
+    return sample_indices[top_sample_indices], acquisition
