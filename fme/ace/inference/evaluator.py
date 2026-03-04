@@ -444,7 +444,7 @@ def run_batched_ensemble_evaluator_from_config(config: BatchedEnsembleEvaluatorC
     dataset = XarrayDataset(
         base_evaluator_config.loader.dataset,
         window_requirements.names,
-        window_requirements.n_timesteps_schedule,
+        window_requirements.n_timesteps,
     )
 
     stepper = base_evaluator_config.load_stepper()
