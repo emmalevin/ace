@@ -202,6 +202,7 @@ class InferenceDataset(torch.utils.data.Dataset):
         label_override: list[str] | None = None,
         surface_temperature_name: str | None = None,
         ocean_fraction_name: str | None = None,
+        dataset: XarrayDataset | None = None,
     ):
         """
         Parameters:
@@ -213,18 +214,21 @@ class InferenceDataset(torch.utils.data.Dataset):
                 in the dataset.
             surface_temperature_name: Name of the surface temperature variable.
             ocean_fraction_name: Name of the ocean fraction variable.
+            dataset: if provided, use this dataset instead of creating a new one.
         """
         self._label_override = (
             set(label_override) if label_override is not None else None
         )
-        if isinstance(config.dataset, XarrayDataConfig):
-            dataset: XarrayDataset | MergedXarrayDataset = XarrayDataset(
-                config.dataset, requirements.names, requirements.n_timesteps
-            )
-            properties = dataset.properties
-        elif isinstance(config.dataset, MergeNoConcatDatasetConfig):
-            dataset = self._resolve_merged_datasets(config.dataset, requirements)
-            properties = dataset.properties
+        if dataset is None:
+            if isinstance(config.dataset, XarrayDataConfig):
+                dataset = XarrayDataset(
+                    config.dataset,
+                    requirements.names,
+                    requirements.n_timesteps_schedule,
+                )
+            elif isinstance(config.dataset, MergeNoConcatDatasetConfig):
+                dataset = self._resolve_merged_datasets(config.dataset, requirements)
+        properties = dataset.properties
         self._properties = properties
         self._dataset = dataset
         self._forward_steps_in_memory = requirements.n_timesteps - 1
