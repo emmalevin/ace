@@ -121,10 +121,6 @@ def main_loop(
     )
     print(f"Updated fast-inference YAMLs with {total_time_indices} start indices.")
 
-    # Make candidate indices list
-    candidate_indices_list = np.arange(total_time_indices-1)
-    candidate_indices_list = np.setdiff1d(candidate_indices_list, training_indices_list)
-
     # Before loop: Update YAML files with initial indices
     print("Updating YAML files with initial training indices...")
     for training_yaml_file in training_yaml_files:
@@ -206,6 +202,7 @@ def main_loop(
                     inference_output_dir=str(inference_output_dir),
                     py_kde=py_kde,
                     candidate_time_indices=np.arange(total_time_indices),
+                    training_indices=training_indices_list,
                     variable="PRESsfc",
                     lat_min=22.0,
                     lat_max=29.0,
@@ -237,7 +234,6 @@ def main_loop(
         # TODO: User may add: map high_variance_sample_indices to time indices, add to
         # training_indices_list, update YAML files, and optionally run training again.
         training_indices_list.extend(high_variance_sample_indices)
-        candidate_indices_list = np.setdiff1d(candidate_indices_list, high_variance_sample_indices)
 
         print(f"Updated training indices list: {training_indices_list}")
         for training_yaml_file in training_yaml_files:
@@ -272,6 +268,9 @@ def main_loop(
         print(f"Iteration {iteration + 1}/{n_iterations} completed")
         print(f"{'='*60}")
         print(f"Current training indices list: {training_indices_list}")
+        candidate_indices_list = np.setdiff1d(
+            np.arange(total_time_indices - 1), np.unique(training_indices_list)
+        )
         print(f"Current candidate indices list: {candidate_indices_list}")
         print(f"{'='*60}\n")
 

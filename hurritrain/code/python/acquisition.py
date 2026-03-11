@@ -108,6 +108,7 @@ def compute_min_pressure_variance_and_top_sample_indices_batched(
     py_kde: gaussian_kde | None = None,
     px_path: str = _DEFAULT_PX_PATH,
     candidate_time_indices: np.ndarray | None = None,
+    training_indices: np.ndarray | list[int] | None = None,
     variable: str = "PRESsfc",
     lat_min: float = 22.0,
     lat_max: float = 29.0,
@@ -127,6 +128,8 @@ def compute_min_pressure_variance_and_top_sample_indices_batched(
     candidate_time_indices: 1D array of length n_sample mapping zarr sample position i to the
         time index in the full dataset. Used to subsample px (full length e.g. 1462) to the
         inference samples. If None, px is required to have length n_sample.
+    training_indices: Time indices already in the training set. Only candidates not in this
+        set are considered for selection; avoids adding duplicates to training.
     """
     if py_kde is None:
         raise ValueError("py_kde is required")
@@ -186,5 +189,15 @@ def compute_min_pressure_variance_and_top_sample_indices_batched(
     inv_py_kde = 1.0 / (py_kde_values + kde_eps)
     acquisition = variances * inv_py_kde * px
 
-    top_sample_indices = np.argsort(acquisition)[-n_top:][::-1]
+    # Restrict to candidates not already in training (no repeats)
+    training_set = set() if training_indices is None else set(np.asarray(training_indices).ravel())
+    candidate_mask = np.array([t not in training_set for t in candidate_time_indices])
+    candidate_sample_indices = np.where(candidate_mask)[0]
+    if len(candidate_sample_indices) == 0:
+        return np.array([], dtype=np.int64), acquisition
+
+    acquisition_candidates = acquisition[candidate_sample_indices]
+    n_select = min(n_top, len(candidate_sample_indices))
+    top_in_candidates = np.argsort(acquisition_candidates)[-n_select:][::-1]
+    top_sample_indices = candidate_sample_indices[top_in_candidates]
     return candidate_time_indices[top_sample_indices], acquisition
