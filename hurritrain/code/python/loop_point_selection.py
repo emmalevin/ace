@@ -4,6 +4,8 @@ Active learning loop: train on selected indices, run inference, compute acquisit
 
 import glob
 import os
+import shutil
+import time
 from pathlib import Path
 
 import numpy as np
@@ -15,15 +17,30 @@ from acquisition import (
     compute_min_pressure_variance_and_top_sample_indices_batched,
 )
 from index_selection import select_random_time_indices
-from inference_runner import run_inference, submit_batched_inference_jobs
+from inference_runner import (
+    InferenceJobFailureError,
+    run_inference,
+    submit_batched_inference_jobs,
+)
 from probability_data import load_probability_data
-from training import run_training_parallel
+from training_runner import (
+    TrainingJobFailureError,
+    submit_batched_training_jobs,
+)
 from yaml_utils import (
     update_fast_inference_indices_for_both,
     update_yaml_training_indices,
 )
 
 torch.cuda.empty_cache()
+
+
+def _exit_on_job_failure(e: Exception, msg_prefix: str = "Stopping") -> None:
+    """Print message and exit with code 1 on training or inference job failure."""
+    print(f"\n{'='*60}")
+    print(f"{msg_prefix}: {e}")
+    print(f"{'='*60}\n")
+    raise SystemExit(1)
 
 
 def main_loop(
@@ -44,9 +61,19 @@ def main_loop(
         seed: Random seed for initial index selection.
     """
 
+    # Clear existing inference output so this run starts fresh
+    inference_output_dirs = [
+        "/scratch/gpfs/GVECCHI/el2358/ace/hurritrain/inference_output/model1_inference",
+        "/scratch/gpfs/GVECCHI/el2358/ace/hurritrain/inference_output/model2_inference",
+    ]
+    for d in inference_output_dirs:
+        if os.path.isdir(d):
+            shutil.rmtree(d)
+        os.makedirs(d, exist_ok=True)
+    print("Cleared existing inference output directories.")
+
     px, py = load_probability_data(py_filename="kde_pres_1940.pkl")
-    px_kde = px["kde"]
-    py_kde = py["kde"]
+    py_kde = py
 
     # Determine YAML file paths
     if yaml_dir is None:
@@ -107,18 +134,33 @@ def main_loop(
         update_yaml_training_indices(training_yaml_file, training_indices_list, total_time_indices)
         print(f"Updated {training_yaml_file}")
 
-    # Run training with initial random points
+    # Run training with initial random points (submit SLURM jobs for model1 and model2)
     print("\nRunning training with initial random points...")
     valid_training_yaml_files = [f for f in training_yaml_files if os.path.exists(f)]
     valid_inference_yaml_files = [f for f in fast_inference_yaml_files if os.path.exists(f)]
-    
+
     if not valid_training_yaml_files:
         print("Warning: No valid YAML files found for training")
     if not valid_inference_yaml_files:
         print("Warning: No valid YAML files found for inference")
     else:
-        base_port = 29500
-        run_training_parallel(valid_training_yaml_files, base_port=base_port)
+        shell_dir = Path(__file__).parent.parent / "shell"
+        model1_train_script = shell_dir / "model1_batch_training.sh"
+        model2_train_script = shell_dir / "model2_batch_training.sh"
+        if not model1_train_script.exists() or not model2_train_script.exists():
+            print("Warning: Training batch scripts not found; skipping training.")
+        else:
+            try:
+                t0 = time.time()
+                submit_batched_training_jobs(
+                    str(model1_train_script),
+                    str(model2_train_script),
+                    wait=True,
+                )
+                elapsed = time.time() - t0
+                print(f"Initial training jobs finished in {elapsed/60:.1f} min ({elapsed:.0f} s).")
+            except (InferenceJobFailureError, TrainingJobFailureError) as e:
+                _exit_on_job_failure(e, "Stopping")
     
 
     
@@ -140,12 +182,17 @@ def main_loop(
             print("Warning: Fast inference scripts not found; skipping inference.")
         else:
             print("Submitting fast inference jobs (model1 and model2) in parallel...")
-            submit_batched_inference_jobs(
-                str(model1_script),
-                str(model2_script),
-                wait=True,
-            )
-            print("Fast inference jobs finished.")
+            try:
+                t0 = time.time()
+                submit_batched_inference_jobs(
+                    str(model1_script),
+                    str(model2_script),
+                    wait=True,
+                )
+                elapsed = time.time() - t0
+                print(f"Inference jobs finished in {elapsed/60:.1f} min ({elapsed:.0f} s).")
+            except (InferenceJobFailureError, TrainingJobFailureError) as e:
+                _exit_on_job_failure(e, "Stopping loop")
 
         # Compute acquisition from inference zarr outputs (one zarr per model)
         inference_output_dir = Path(__file__).parent.parent.parent / "inference_output"
@@ -158,6 +205,7 @@ def main_loop(
                 top_candidate_indices, acquisition = compute_min_pressure_variance_and_top_sample_indices_batched(
                     inference_output_dir=str(inference_output_dir),
                     py_kde=py_kde,
+                    candidate_time_indices=np.arange(total_time_indices),
                     variable="PRESsfc",
                     lat_min=22.0,
                     lat_max=29.0,
@@ -168,11 +216,23 @@ def main_loop(
                 high_variance_sample_indices = top_candidate_indices.tolist()
                 print(f"Candidate indices with 2 highest acquisition (zarr): {high_variance_sample_indices}")
             except Exception as e:
-                high_variance_sample_indices = []
-                print(f"Warning: Acquisition from zarr failed: {e}")
+                print(f"\n{'='*60}")
+                print(f"Stopping loop: Acquisition from zarr failed: {e}")
+                print(f"{'='*60}\n")
+                raise SystemExit(1)
         else:
             high_variance_sample_indices = []
             print("Warning: Inference zarr stores missing (model1_inference/ and model2_inference/autoregressive_predictions.zarr); skipping acquisition.")
+
+        # Clear inference output only after acquisition succeeded, so next iteration gets fresh zarrs
+        inference_output_dirs = [
+            "/scratch/gpfs/GVECCHI/el2358/ace/hurritrain/inference_output/model1_inference",
+            "/scratch/gpfs/GVECCHI/el2358/ace/hurritrain/inference_output/model2_inference",
+        ]
+        for d in inference_output_dirs:
+            if os.path.isdir(d):
+                shutil.rmtree(d)
+            os.makedirs(d, exist_ok=True)
 
         # TODO: User may add: map high_variance_sample_indices to time indices, add to
         # training_indices_list, update YAML files, and optionally run training again.
@@ -187,10 +247,25 @@ def main_loop(
             update_yaml_training_indices(training_yaml_file, training_indices_list, total_time_indices)
             print(f"Updated {training_yaml_file}")
 
-        # Run training with new indices
+        # Run training with new indices (submit SLURM jobs for model1 and model2)
         print("\nRunning training with new indices...")
-        valid_training_yaml_files = [f for f in training_yaml_files if os.path.exists(f)]
-        run_training_parallel(valid_training_yaml_files, base_port=29500)
+        shell_dir = Path(__file__).parent.parent / "shell"
+        model1_train_script = shell_dir / "model1_batch_training.sh"
+        model2_train_script = shell_dir / "model2_batch_training.sh"
+        if not model1_train_script.exists() or not model2_train_script.exists():
+            print("Warning: Training batch scripts not found; skipping training.")
+        else:
+            try:
+                t0 = time.time()
+                submit_batched_training_jobs(
+                    str(model1_train_script),
+                    str(model2_train_script),
+                    wait=True,
+                )
+                elapsed = time.time() - t0
+                print(f"Training jobs finished in {elapsed/60:.1f} min ({elapsed:.0f} s).")
+            except (InferenceJobFailureError, TrainingJobFailureError) as e:
+                _exit_on_job_failure(e, "Stopping loop")
 
         # Main loop end
         print(f"\n{'='*60}")

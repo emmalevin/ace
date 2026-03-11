@@ -19,17 +19,18 @@ def load_probability_data(
         px_filename: Filename for px (EOF KDE, default: "eof_kde_h500_modes3.pkl").
         py_filename: Filename for py (variable KDE, default: "kde_pdf_PRESsfc.pkl").
 
-    Returns:
-        tuple: (px, py)
-            - px: Dictionary containing 'kde' (gaussian_kde object) and 'eof_results' (dict)
-            - py: Dictionary containing 'kde' (gaussian_kde object) and 'mean_values' (np.ndarray)
+    # THIS IS NOT TRUE:
+    # Returns:
+    #     tuple: (px, py)
+    #         - px: Dictionary containing 'kde' (gaussian_kde object) and 'eof_results' (dict)
+    #         - py: Dictionary containing 'kde' (gaussian_kde object) and 'mean_values' (np.ndarray)
 
-    Example:
-        px, py = load_probability_data()
-        px_kde = px['kde']
-        px_eof_results = px['eof_results']
-        py_kde = py['kde']
-        py_mean_values = py['mean_values']
+    # Example:
+    #     px, py = load_probability_data()
+    #     px_kde = px['kde']
+    #     px_eof_results = px['eof_results']
+    #     py_kde = py['kde']
+    #     py_mean_values = py['mean_values']
     """
     px_path = os.path.join(probability_data_dir, px_filename)
     py_path = os.path.join(probability_data_dir, py_filename)
@@ -54,7 +55,5 @@ def load_probability_data(
         py = pickle.load(f)
 
     print("Probability data loaded successfully!")
-    print(f"  px keys: {list(px.keys())}")
-    print(f"  py keys: {list(py.keys())}")
 
     return px, py

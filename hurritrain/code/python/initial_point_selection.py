@@ -141,9 +141,16 @@ def update_yaml_indices(
         raise ValueError(
             f"YAML file {yaml_path} does not have 'train_loader.dataset.subset' section"
         )
-    
-    # Update indices
-    config["train_loader"]["dataset"]["subset"]["indices"] = index_groups
+
+    subset = config["train_loader"]["dataset"]["subset"]
+    # Support both formats: subset as list (used by loop_point_selection/yaml_utils)
+    # or subset as dict with "indices" key (legacy).
+    if isinstance(subset, list):
+        # Flatten index_groups into a single list of indices
+        flat_indices = [idx for group in index_groups for idx in group]
+        config["train_loader"]["dataset"]["subset"] = flat_indices
+    else:
+        config["train_loader"]["dataset"]["subset"]["indices"] = index_groups
     
     # Write back to file
     with open(yaml_path, "w") as f:

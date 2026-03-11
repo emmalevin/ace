@@ -107,6 +107,44 @@ def _wait_for_job(job_id: int, poll_interval: int = 60) -> None:
         time.sleep(poll_interval)
 
 
+def _job_succeeded(job_id: int) -> bool:
+    """
+    Return True if the SLURM job completed successfully (State COMPLETED and exit code 0).
+    Uses sacct; may need a short delay after job ends for sacct to be updated.
+    """
+    result = subprocess.run(
+        ["sacct", "-j", str(job_id), "-n", "-o", "State,ExitCode", "--parsable2"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return False
+    # --parsable2 is pipe-delimited; columns are State, ExitCode (JobID omitted with -o State,ExitCode)
+    lines = [s.strip() for s in result.stdout.strip().split("\n") if s.strip()]
+    for line in lines:
+        parts = line.replace("|", " ").split()
+        if len(parts) >= 2:
+            state, exitcode = parts[-2], parts[-1]
+            # COMPLETED or CD, exit 0:0 or 0
+            if state in ("COMPLETED", "CD") and (exitcode == "0:0" or exitcode == "0"):
+                return True
+            if state in ("FAILED", "CANCELLED", "OUT_OF_MEMORY", "NODE_FAIL", "TIMEOUT", "F", "CA", "OOM", "NF", "TO"):
+                return False
+        elif len(parts) == 1:
+            if parts[0] not in ("COMPLETED", "CD"):
+                return False
+    return any("COMPLETED" in line or "|CD|" in line for line in lines)
+
+
+class InferenceJobFailureError(Exception):
+    """Raised when one or more submitted inference jobs failed (e.g. OOM, non-zero exit)."""
+
+    def __init__(self, message: str, job_ids: tuple[int, int], failed_mask: tuple[bool, bool]):
+        super().__init__(message)
+        self.job_ids = job_ids
+        self.failed_mask = failed_mask
+
+
 def submit_batched_inference_jobs(
     model1_script_path: str,
     model2_script_path: str,
@@ -138,4 +176,21 @@ def submit_batched_inference_jobs(
         _wait_for_job(job_id1, poll_interval=poll_interval)
         _wait_for_job(job_id2, poll_interval=poll_interval)
         print("Both inference jobs completed.")
+        # Check exit status (sacct may need a moment to update)
+        time.sleep(5)
+        ok1 = _job_succeeded(job_id1)
+        ok2 = _job_succeeded(job_id2)
+        if not ok1 or not ok2:
+            failed = (not ok1, not ok2)
+            names = []
+            if not ok1:
+                names.append("model1")
+            if not ok2:
+                names.append("model2")
+            raise InferenceJobFailureError(
+                f"Inference job(s) failed: {', '.join(names)} (job IDs: {job_id1}, {job_id2}). "
+                "Check slurm .err/.out files for details.",
+                job_ids=(job_id1, job_id2),
+                failed_mask=failed,
+            )
     return job_id1, job_id2

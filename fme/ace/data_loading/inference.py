@@ -224,7 +224,7 @@ class InferenceDataset(torch.utils.data.Dataset):
                 dataset = XarrayDataset(
                     config.dataset,
                     requirements.names,
-                    requirements.n_timesteps_schedule,
+                    requirements.n_timesteps,
                 )
             elif isinstance(config.dataset, MergeNoConcatDatasetConfig):
                 dataset = self._resolve_merged_datasets(config.dataset, requirements)

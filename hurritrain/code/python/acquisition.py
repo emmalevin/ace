@@ -107,6 +107,7 @@ def compute_min_pressure_variance_and_top_sample_indices_batched(
     inference_output_dir: str = _DEFAULT_INFERENCE_OUTPUT_DIR,
     py_kde: gaussian_kde | None = None,
     px_path: str = _DEFAULT_PX_PATH,
+    candidate_time_indices: np.ndarray | None = None,
     variable: str = "PRESsfc",
     lat_min: float = 22.0,
     lat_max: float = 29.0,
@@ -120,9 +121,12 @@ def compute_min_pressure_variance_and_top_sample_indices_batched(
     Load one zarr per model (autoregressive_predictions.zarr in model1_inference and
     model2_inference). Dimensions (sample, time, lat, lon); use time step time_index (default 1).
     Compute min surface pressure in Gulf box per sample, then acquisition = var * inv_py_kde * px;
-    return top n_top sample indices.
+    return top n_top time indices (and acquisition per sample).
 
     inference_output_dir: path containing model1_inference/ and model2_inference/.
+    candidate_time_indices: 1D array of length n_sample mapping zarr sample position i to the
+        time index in the full dataset. Used to subsample px (full length e.g. 1462) to the
+        inference samples. If None, px is required to have length n_sample.
     """
     if py_kde is None:
         raise ValueError("py_kde is required")
@@ -146,14 +150,29 @@ def compute_min_pressure_variance_and_top_sample_indices_batched(
             f"Model1 and model2 have different sample sizes: {n_sample} vs {len(min_pressure_model2)}"
         )
 
-    sample_indices = np.arange(n_sample)
-    px = np.load(px_path).squeeze()
-    if px.size != n_sample:
-        raise ValueError(
-            f"px length {px.size} does not match number of samples {n_sample}"
-        )
-    if px.ndim > 1:
-        px = px.ravel()[:n_sample]
+    px_full = np.load(px_path).squeeze()
+    if px_full.ndim > 1:
+        px_full = px_full.ravel()
+    if candidate_time_indices is not None:
+        candidate_time_indices = np.asarray(candidate_time_indices).ravel()
+        if len(candidate_time_indices) != n_sample:
+            raise ValueError(
+                f"candidate_time_indices length {len(candidate_time_indices)} does not match "
+                f"number of samples {n_sample}"
+            )
+        if np.any(candidate_time_indices < 0) or np.any(candidate_time_indices >= px_full.size):
+            raise ValueError(
+                f"candidate_time_indices must be in [0, {px_full.size}); got min={candidate_time_indices.min()}, max={candidate_time_indices.max()}"
+            )
+        px = px_full[candidate_time_indices]
+    else:
+        if px_full.size != n_sample:
+            raise ValueError(
+                f"px length {px_full.size} does not match number of samples {n_sample}. "
+                "Pass candidate_time_indices to subsample px to the inference samples."
+            )
+        px = px_full
+        candidate_time_indices = np.arange(n_sample)
 
     variances = np.var(
         np.stack([min_pressure_model1, min_pressure_model2], axis=-1), axis=-1
@@ -168,4 +187,4 @@ def compute_min_pressure_variance_and_top_sample_indices_batched(
     acquisition = variances * inv_py_kde * px
 
     top_sample_indices = np.argsort(acquisition)[-n_top:][::-1]
-    return sample_indices[top_sample_indices], acquisition
+    return candidate_time_indices[top_sample_indices], acquisition
