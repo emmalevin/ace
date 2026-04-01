@@ -140,10 +140,29 @@ def update_yaml_inference_indices(
         yaml.dump(config, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
 
+def read_fast_inference_n_forward_steps(yaml_path: str) -> int:
+    """Read ``base_evaluator_config.n_forward_steps`` from a fast-inference evaluator YAML."""
+    with open(yaml_path, "r") as f:
+        config = yaml.safe_load(f)
+    if config is None:
+        raise ValueError(f"YAML file {yaml_path} is empty or could not be parsed")
+    be = config.get("base_evaluator_config")
+    if be is None or "n_forward_steps" not in be:
+        raise ValueError(
+            f"YAML file {yaml_path} missing base_evaluator_config.n_forward_steps"
+        )
+    return int(be["n_forward_steps"])
+
+
 def update_fast_inference_start_indices(yaml_path: str, n_indices: int) -> None:
     """
     Update base_evaluator_config.loader.start_indices.list in a fast-inference
     evaluator YAML to [0, 1, ..., n_indices-1].
+
+    For FME inference, each start index i must satisfy
+    n_forward_steps <= total_timesteps - i - 1. With contiguous indices from 0,
+    use n_indices = max_timesteps - n_forward_steps so the largest start is
+    max_timesteps - n_forward_steps - 1.
     """
     with open(yaml_path, "r") as f:
         config = yaml.safe_load(f)
@@ -166,7 +185,7 @@ def update_fast_inference_indices_for_both(
     model2_yaml_path: str,
     n_indices: int,
 ) -> None:
-    """Update both fast-inference YAMLs with start_indices list [0, 1, ..., n_indices-1]."""
+    """Update both fast-inference YAMLs: ``list(range(n_indices))`` as loader start indices."""
     update_fast_inference_start_indices(model1_yaml_path, n_indices)
     update_fast_inference_start_indices(model2_yaml_path, n_indices)
 

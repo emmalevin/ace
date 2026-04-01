@@ -29,6 +29,7 @@ from training_runner import (
 )
 from yaml_utils import (
     load_active_sampling_config,
+    read_fast_inference_n_forward_steps,
     update_fast_inference_indices_for_both,
     update_yaml_training_indices,
 )
@@ -50,7 +51,7 @@ def main_loop(
     data_path: str = "/scratch/gpfs/GVECCHI/el2358/ace/training_data",
     yaml_dir: str | None = None,
     seed: int | None = 42,
-    n_top: int = 2,
+    n_top: int = 5,
     probability_data_dir: str = "/scratch/gpfs/GVECCHI/el2358/ace/hurritrain/probability_data",
     px_pickle_filename: str = "eof_kde_h500_modes3.pkl",
     py_pickle_filename: str = "kde_pres_1940.pkl",
@@ -137,13 +138,26 @@ def main_loop(
     # change total indices to 100 as a test
     #total_time_indices = 100
 
-    # Update fast-inference YAMLs with start_indices [0, 1, ..., total_time_indices-1]
+    # Inference: need n_forward_steps <= total_timesteps - start - 1 for every start.
+    # With starts 0..N-1, require N <= total_time_indices - n_forward_steps.
+    n_forward_steps_inf = read_fast_inference_n_forward_steps(fast_inference_yaml_files[0])
+    n_inference_starts = total_time_indices - n_forward_steps_inf
+    if n_inference_starts < 1:
+        raise ValueError(
+            f"Cannot run inference: dataset has {total_time_indices} time steps but "
+            f"fast_inference n_forward_steps={n_forward_steps_inf} needs at least "
+            f"{n_forward_steps_inf + 1} times (so at least one valid start index)."
+        )
     update_fast_inference_indices_for_both(
         fast_inference_yaml_files[0],
         fast_inference_yaml_files[1],
-        total_time_indices,
+        n_inference_starts,
     )
-    print(f"Updated fast-inference YAMLs with {total_time_indices} start indices.")
+    print(
+        f"Updated fast-inference YAMLs with {n_inference_starts} start indices "
+        f"(0..{n_inference_starts - 1}; total_times={total_time_indices}, "
+        f"n_forward_steps={n_forward_steps_inf})."
+    )
 
     # Before loop: Update YAML files with initial indices
     print("Updating YAML files with initial training indices...")
@@ -225,7 +239,7 @@ def main_loop(
                     inference_output_dir=str(inference_output_root),
                     py_kde=py_kde,
                     px_path=acquisition_px_npy_path,
-                    candidate_time_indices=np.arange(total_time_indices),
+                    candidate_time_indices=np.arange(n_inference_starts),
                     training_indices=training_indices_list,
                     variable="PRESsfc",
                     lat_min=22.0,
