@@ -4,12 +4,74 @@ Update YAML config files for training and inference indices.
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 import yaml
 
 if TYPE_CHECKING:
     import numpy as np
+
+
+def _resolve_path_if_relative(path: str | None, base_dir: str) -> str | None:
+    if path is None or path == "":
+        return None
+    path = os.path.normpath(path)
+    if os.path.isabs(path):
+        return path
+    return os.path.normpath(os.path.join(base_dir, path))
+
+
+def load_active_sampling_config(config_path: str) -> dict[str, Any]:
+    """
+    Load ``active_sampling.yaml``. Relative paths are resolved against the config file's directory.
+
+    Keys (see ``hurritrain/code/yaml/active_sampling.yaml``): n_iterations, n_initial_indices,
+    seed, n_top, data_path, probability_data_dir, px_pickle_filename, py_pickle_filename,
+    acquisition_px_npy_path, train_inference_yaml_dir, inference_output_dir (optional).
+    """
+    config_path = os.path.abspath(config_path)
+    if not os.path.isfile(config_path):
+        raise FileNotFoundError(f"Active sampling config not found: {config_path}")
+    base_dir = os.path.dirname(config_path)
+    with open(config_path, "r") as f:
+        raw = yaml.safe_load(f)
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise TypeError(f"Expected mapping at top level of {config_path}, got {type(raw)!r}")
+
+    # Defaults align with previous loop_point_selection / acquisition defaults
+    defaults: dict[str, Any] = {
+        "n_iterations": 3,
+        "n_initial_indices": 10,
+        "seed": 42,
+        "n_top": 2,
+        "data_path": "/scratch/gpfs/GVECCHI/el2358/ace/training_data",
+        "probability_data_dir": "/scratch/gpfs/GVECCHI/el2358/ace/hurritrain/probability_data",
+        "px_pickle_filename": "eof_kde_h500_modes3.pkl",
+        "py_pickle_filename": "kde_pres_1940.pkl",
+        "acquisition_px_npy_path": (
+            "/scratch/gpfs/GVECCHI/el2358/ace/hurritrain/probability_data/kde_pdf_values_h500_1940.npy"
+        ),
+        "train_inference_yaml_dir": base_dir,
+        "inference_output_dir": None,
+    }
+    cfg = {**defaults, **raw}
+
+    for key in (
+        "data_path",
+        "probability_data_dir",
+        "acquisition_px_npy_path",
+        "train_inference_yaml_dir",
+        "inference_output_dir",
+    ):
+        if key in cfg and cfg[key] is not None and cfg[key] != "":
+            cfg[key] = _resolve_path_if_relative(str(cfg[key]), base_dir)
+
+    if cfg["train_inference_yaml_dir"] is None:
+        cfg["train_inference_yaml_dir"] = base_dir
+
+    return cfg
 
 
 def update_yaml_training_indices(

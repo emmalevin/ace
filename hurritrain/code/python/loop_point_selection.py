@@ -28,6 +28,7 @@ from training_runner import (
     submit_batched_training_jobs,
 )
 from yaml_utils import (
+    load_active_sampling_config,
     update_fast_inference_indices_for_both,
     update_yaml_training_indices,
 )
@@ -44,27 +45,51 @@ def _exit_on_job_failure(e: Exception, msg_prefix: str = "Stopping") -> None:
 
 
 def main_loop(
-    n_iterations: int = 1,
+    n_iterations: int = 3,
     n_initial_indices: int = 10,
     data_path: str = "/scratch/gpfs/GVECCHI/el2358/ace/training_data",
     yaml_dir: str | None = None,
-    seed: int | None = None,
+    seed: int | None = 42,
+    n_top: int = 2,
+    probability_data_dir: str = "/scratch/gpfs/GVECCHI/el2358/ace/hurritrain/probability_data",
+    px_pickle_filename: str = "eof_kde_h500_modes3.pkl",
+    py_pickle_filename: str = "kde_pres_1940.pkl",
+    acquisition_px_npy_path: str = (
+        "/scratch/gpfs/GVECCHI/el2358/ace/hurritrain/probability_data/kde_pdf_values_h500_1940.npy"
+    ),
+    inference_output_dir: str | None = None,
 ):
     """
     Main loop for active learning algorithm.
-    
+
     Args:
-        n_iterations: Number of iterations to run (default: 50).
-        n_initial_indices: Number of initial random indices to select (default: 10).
-        data_path: Path to training data directory.
-        yaml_dir: Directory containing YAML files. If None, uses default location.
-        seed: Random seed for initial index selection.
+        n_iterations: Number of iterations to run.
+        n_initial_indices: Number of initial random time indices to select for training.
+        data_path: Path to training data directory (NetCDF files).
+        yaml_dir: Directory with model*_train_initial.yaml and model*_fast_inference.yaml.
+            If None, uses hurritrain/code/yaml next to this file.
+        seed: Random seed for initial index selection; None means non-deterministic.
+        n_top: Number of highest-acquisition points to add each iteration.
+        probability_data_dir: Directory containing px/py pickle files for KDE loading.
+        px_pickle_filename, py_pickle_filename: Filenames under probability_data_dir.
+        acquisition_px_npy_path: Path to per-time px weights for batched acquisition.
+        inference_output_dir: Root for model1_inference / model2_inference zarr.
+            If None, uses hurritrain/inference_output relative to this package.
     """
 
+    if yaml_dir is None:
+        yaml_dir = str(Path(__file__).resolve().parent.parent / "yaml")
+
+    if inference_output_dir is None:
+        inference_output_dir = str(
+            Path(__file__).resolve().parent.parent.parent / "inference_output"
+        )
+
+    inference_output_root = Path(inference_output_dir)
     # Clear existing inference output so this run starts fresh
     inference_output_dirs = [
-        "/scratch/gpfs/GVECCHI/el2358/ace/hurritrain/inference_output/model1_inference",
-        "/scratch/gpfs/GVECCHI/el2358/ace/hurritrain/inference_output/model2_inference",
+        str(inference_output_root / "model1_inference"),
+        str(inference_output_root / "model2_inference"),
     ]
     for d in inference_output_dirs:
         if os.path.isdir(d):
@@ -72,14 +97,13 @@ def main_loop(
         os.makedirs(d, exist_ok=True)
     print("Cleared existing inference output directories.")
 
-    px, py = load_probability_data(py_filename="kde_pres_1940.pkl")
-    py_kde = py
+    _, py = load_probability_data(
+        probability_data_dir=probability_data_dir,
+        px_filename=px_pickle_filename,
+        py_filename=py_pickle_filename,
+    )
+    py_kde = py["kde"] if isinstance(py, dict) and "kde" in py else py
 
-    # Determine YAML file paths
-    if yaml_dir is None:
-        base_dir = Path(__file__).parent.parent / "yaml"
-        yaml_dir = str(base_dir)
-    
     training_yaml_files = [
         os.path.join(yaml_dir, "model1_train_initial.yaml"),
         os.path.join(yaml_dir, "model2_train_initial.yaml"),
@@ -111,7 +135,7 @@ def main_loop(
 
     # ---- FIX LATER -----
     # change total indices to 100 as a test
-    total_time_indices = 100
+    #total_time_indices = 100
 
     # Update fast-inference YAMLs with start_indices [0, 1, ..., total_time_indices-1]
     update_fast_inference_indices_for_both(
@@ -191,16 +215,16 @@ def main_loop(
                 _exit_on_job_failure(e, "Stopping loop")
 
         # Compute acquisition from inference zarr outputs (one zarr per model)
-        inference_output_dir = Path(__file__).parent.parent.parent / "inference_output"
-        zarr1 = inference_output_dir / "model1_inference" / "autoregressive_predictions.zarr"
-        zarr2 = inference_output_dir / "model2_inference" / "autoregressive_predictions.zarr"
+        zarr1 = inference_output_root / "model1_inference" / "autoregressive_predictions.zarr"
+        zarr2 = inference_output_root / "model2_inference" / "autoregressive_predictions.zarr"
         has_zarr1 = zarr1.is_dir()
         has_zarr2 = zarr2.is_dir()
         if has_zarr1 and has_zarr2:
             try:
                 top_candidate_indices, acquisition = compute_min_pressure_variance_and_top_sample_indices_batched(
-                    inference_output_dir=str(inference_output_dir),
+                    inference_output_dir=str(inference_output_root),
                     py_kde=py_kde,
+                    px_path=acquisition_px_npy_path,
                     candidate_time_indices=np.arange(total_time_indices),
                     training_indices=training_indices_list,
                     variable="PRESsfc",
@@ -208,10 +232,12 @@ def main_loop(
                     lat_max=29.0,
                     lon_min=263.0,
                     lon_max=277.0,
-                    n_top=2,
+                    n_top=n_top,
                 )
                 high_variance_sample_indices = top_candidate_indices.tolist()
-                print(f"Candidate indices with 2 highest acquisition (zarr): {high_variance_sample_indices}")
+                print(
+                    f"Candidate indices with top {n_top} acquisition (zarr): {high_variance_sample_indices}"
+                )
             except Exception as e:
                 print(f"\n{'='*60}")
                 print(f"Stopping loop: Acquisition from zarr failed: {e}")
@@ -223,8 +249,8 @@ def main_loop(
 
         # Clear inference output only after acquisition succeeded, so next iteration gets fresh zarrs
         inference_output_dirs = [
-            "/scratch/gpfs/GVECCHI/el2358/ace/hurritrain/inference_output/model1_inference",
-            "/scratch/gpfs/GVECCHI/el2358/ace/hurritrain/inference_output/model2_inference",
+            str(inference_output_root / "model1_inference"),
+            str(inference_output_root / "model2_inference"),
         ]
         for d in inference_output_dirs:
             if os.path.isdir(d):
@@ -301,45 +327,30 @@ def main_loop(
 
 if __name__ == "__main__":
     import argparse
-    
+
+    default_config = Path(__file__).resolve().parent.parent / "yaml" / "active_sampling.yaml"
     parser = argparse.ArgumentParser(description="Run active learning loop")
     parser.add_argument(
-        "--n_iterations",
-        type=int,
-        default=3,
-        help="Number of iterations to run (default: 50)",
-    )
-    parser.add_argument(
-        "--n_initial_indices",
-        type=int,
-        default=2,
-        help="Number of initial random indices to select (default: 10)",
-    )
-    parser.add_argument(
-        "--data_path",
+        "--config",
         type=str,
-        default="/scratch/gpfs/GVECCHI/el2358/ace/training_data",
-        help="Path to training data directory",
+        default=str(default_config),
+        help=f"Path to active_sampling.yaml (default: {default_config})",
     )
-    parser.add_argument(
-        "--yaml_dir",
-        type=str,
-        default=None,
-        help="Directory containing YAML files. If not provided, uses default location.",
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=42,
-        help="Random seed for initial index selection (optional)",
-    )
-    
     args = parser.parse_args()
-    
+
+    cfg = load_active_sampling_config(args.config)
     main_loop(
-        n_iterations=args.n_iterations,
-        n_initial_indices=args.n_initial_indices,
-        data_path=args.data_path,
-        yaml_dir=args.yaml_dir,
-        seed=args.seed,
+        n_iterations=int(cfg["n_iterations"]),
+        n_initial_indices=int(cfg["n_initial_indices"]),
+        data_path=str(cfg["data_path"]),
+        yaml_dir=str(cfg["train_inference_yaml_dir"]),
+        seed=cfg["seed"] if cfg["seed"] is None else int(cfg["seed"]),
+        n_top=int(cfg["n_top"]),
+        probability_data_dir=str(cfg["probability_data_dir"]),
+        px_pickle_filename=str(cfg["px_pickle_filename"]),
+        py_pickle_filename=str(cfg["py_pickle_filename"]),
+        acquisition_px_npy_path=str(cfg["acquisition_px_npy_path"]),
+        inference_output_dir=cfg["inference_output_dir"]
+        if cfg.get("inference_output_dir")
+        else None,
     )

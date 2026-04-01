@@ -115,7 +115,7 @@ def compute_min_pressure_variance_and_top_sample_indices_batched(
     lon_min: float = 263.0,
     lon_max: float = 277.0,
     time_index: int = 1,
-    n_top: int = 2,
+    n_top: int = 5,
     kde_eps: float = 1e-10,
 ) -> tuple[np.ndarray, np.ndarray]:
     """

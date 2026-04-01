@@ -1,0 +1,27 @@
+# Active learning loop config (loop_point_selection.py).
+# Relative paths are resolved against this file's directory.
+
+n_iterations: 3
+n_initial_indices: 10
+seed: 42
+n_top: 5
+
+data_path: /scratch/gpfs/GVECCHI/el2358/ace/training_data
+
+# Directory containing px/py KDE pickle files (load_probability_data).
+probability_data_dir: /scratch/gpfs/GVECCHI/el2358/ace/hurritrain/probability_data
+px_pickle_filename: eof_kde_h500_modes3.pkl
+py_pickle_filename: kde_pres_1940.pkl
+
+# Per-time px weights (.npy) passed to batched acquisition (variance * inv_py_kde * px).
+acquisition_px_npy_path: /scratch/gpfs/GVECCHI/el2358/ace/hurritrain/probability_data/kde_pdf_values_h500_1940.npy
+
+# Directory with model1_train_initial.yaml, model2_train_initial.yaml,
+# model1_fast_inference.yaml, model2_fast_inference.yaml.
+# Use "." to mean the same directory as this file.
+train_inference_yaml_dir: .
+
+# Root for model{1,2}_inference zarr outputs (optional; default is hurritrain/inference_output).
+# If you set this, update base_evaluator_config.experiment_dir in model{1,2}_fast_inference.yaml
+# so evaluator writes zarrs under the same paths the loop clears and reads.
+# inference_output_dir: ../inference_output
