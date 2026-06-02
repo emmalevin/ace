@@ -187,6 +187,12 @@ class TrainConfig:
         checkpoint_every_n_batches: How often to save latest checkpoint during training.
             If 0 is given, checkpoints will not be saved based on batch progress,
             only other factors like pre-emption or being at the end of an epoch.
+        save_restart_every_n_epochs: Save the per-epoch restart checkpoints
+            (ckpt.tar, ema_ckpt.tar, best_ckpt.tar) every N epochs. 1 (default)
+            saves every epoch (original behavior). N > 1 saves every Nth epoch.
+            The final epoch is always saved regardless. Set this to a value
+            >= max_epochs to save only at the very end of training (saves I/O
+            time on short epochs at the cost of resume granularity).
         segment_epochs: Exit after training for at most this many epochs
             in current job, without exceeding `max_epochs`. Use this if training
             must be run in segments, e.g. due to wall clock limit.
@@ -226,6 +232,7 @@ class TrainConfig:
     ema_checkpoint_save_epochs: Slice | None = None
     log_train_every_n_batches: int = 100
     checkpoint_every_n_batches: int = 1000
+    save_restart_every_n_epochs: int = 1
     segment_epochs: int | None = None
     save_per_epoch_diagnostics: bool = False
     validation_aggregator: OneStepAggregatorConfig = dataclasses.field(

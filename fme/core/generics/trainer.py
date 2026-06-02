@@ -387,7 +387,9 @@ class Trainer:
             wandb.log(all_logs, step=self.num_batches_seen)
 
             if dist.is_root():
-                if self.config.save_checkpoint:
+                if self.config.save_checkpoint and self._should_save_this_epoch(
+                    self._epochs_trained
+                ):
                     logging.info(f"Saving checkpoints for epoch {self._epochs_trained}")
                     self.save_all_checkpoints(valid_loss, inference_error)
 
@@ -478,13 +480,27 @@ class Trainer:
                 self._save_restart_checkpoints()
                 self._last_saved_num_batches_seen = self.num_batches_seen
         if dist.is_root() and self.num_batches_seen > self._last_saved_num_batches_seen:
-            self._save_restart_checkpoints()  # before incrementing epoch so we will validate after resuming  # noqa: E501
+            if self._should_save_this_epoch(self._epochs_trained + 1):
+                self._save_restart_checkpoints()  # before incrementing epoch so we will validate after resuming  # noqa: E501
         # we will save restart checkpoints again after validation/inference
         # are recorded to wandb
         self._epochs_trained += 1
         self._current_epoch_num_batches_seen = 0
         aggregator.flush_diagnostics(subdir=f"epoch_{self._epochs_trained:04d}")
         return aggregator.get_logs(label="train")
+
+    def _should_save_this_epoch(self, completed_epoch: int) -> bool:
+        """Whether to save per-epoch restart checkpoints at end of `completed_epoch`.
+
+        Final epoch always saves. Otherwise saves every N epochs where N is
+        config.save_restart_every_n_epochs (default 1 = every epoch).
+        """
+        if completed_epoch == self.config.max_epochs:
+            return True
+        n = getattr(self.config, "save_restart_every_n_epochs", 1)
+        if n <= 0:
+            return False
+        return completed_epoch % n == 0
 
     def _save_restart_checkpoints(self):
         logging.info(

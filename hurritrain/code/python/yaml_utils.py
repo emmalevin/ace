@@ -115,6 +115,37 @@ def update_yaml_training_indices(
         yaml.dump(config, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
 
+def update_yaml_max_epochs(yaml_path: str, increment: int = 1) -> int:
+    """Increment top-level `max_epochs` in a training YAML by `increment`. Returns new value."""
+    with open(yaml_path, "r") as f:
+        config = yaml.safe_load(f)
+    if config is None:
+        raise ValueError(f"YAML file {yaml_path} is empty or could not be parsed")
+    config["max_epochs"] = int(config.get("max_epochs", 0)) + increment
+    with open(yaml_path, "w") as f:
+        yaml.dump(config, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    return config["max_epochs"]
+
+
+def set_yaml_max_epochs(yaml_path: str, value: int) -> int:
+    """Set top-level `max_epochs` in a training YAML to an absolute value. Returns the value."""
+    with open(yaml_path, "r") as f:
+        config = yaml.safe_load(f)
+    if config is None:
+        raise ValueError(f"YAML file {yaml_path} is empty or could not be parsed")
+    config["max_epochs"] = int(value)
+    with open(yaml_path, "w") as f:
+        yaml.dump(config, f, default_flow_style=False, sort_keys=False, allow_unicode=True)
+    return int(value)
+
+
+def get_yaml_experiment_dir(yaml_path: str) -> str | None:
+    """Return the top-level `experiment_dir` field from a training YAML, or None if absent."""
+    with open(yaml_path, "r") as f:
+        config = yaml.safe_load(f)
+    return config.get("experiment_dir") if config else None
+
+
 def update_yaml_inference_indices(
     yaml_path: str,
     total_time_indices: int,

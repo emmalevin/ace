@@ -27,10 +27,12 @@ from fme.ace.inference.evaluator import (
     BatchedEnsembleEvaluatorConfig,
     InferenceEvaluatorConfig,
     StepperOverrideConfig,
+    append_predictions_to_zarr,
     main,
     resolve_variable_metadata,
     run_batched_ensemble_evaluator_from_config,
 )
+from fme.ace.inference.data_writer.zarr import ZarrWriterConfig
 from fme.ace.registry import ModuleSelector
 from fme.ace.stepper import Stepper, TrainOutput
 from fme.ace.stepper.single_module import StepperConfig
@@ -58,6 +60,70 @@ from fme.core.typing_ import EnsembleTensorDict, TensorDict, TensorMapping
 
 DIR = pathlib.Path(__file__).parent
 TIMESTEP = datetime.timedelta(hours=6)
+
+
+def test_get_effective_data_writer_config_inference_only():
+    config = InferenceEvaluatorConfig(
+        experiment_dir="/tmp/exp",
+        n_forward_steps=1,
+        checkpoint_path="/tmp/ckpt.tar",
+        logging=LoggingConfig(
+            log_to_screen=False, log_to_wandb=False, log_to_file=False
+        ),
+        loader=InferenceDataLoaderConfig(
+            dataset=XarrayDataConfig(data_path="/tmp"),
+            start_indices=InferenceInitialConditionIndices(
+                first=0, n_initial_conditions=1, interval=1
+            ),
+        ),
+        data_writer=DataWriterConfig(
+            save_prediction_files=True, save_monthly_files=True, names=["PRESsfc"]
+        ),
+        inference_only=True,
+    )
+    effective = config.get_effective_data_writer_config()
+    assert not effective.save_prediction_files
+    assert not effective.save_monthly_files
+    assert effective.files is not None
+    assert len(effective.files) == 1
+    assert isinstance(effective.files[0].format, ZarrWriterConfig)
+    assert effective.files[0].save_reference is False
+    assert effective.files[0].label == "autoregressive"
+    assert effective.files[0].paired_prediction_zarr_path("/tmp/exp") == (
+        "/tmp/exp/autoregressive_predictions.zarr"
+    )
+
+
+def test_append_predictions_to_zarr_small_batch_large_sample_chunks(tmp_path):
+    """Batch zarr uses sample chunks of 1; merge must not force 120 without rechunking."""
+    n_batch = 4
+    dims = ("sample", "time", "lat", "lon")
+    shape = (n_batch, 2, 3, 4)
+    ds = xr.Dataset(
+        {"PRESsfc": (dims, np.zeros(shape, dtype=np.float32))},
+        coords={
+            "sample": np.arange(n_batch),
+            "time": np.arange(2),
+            "lat": np.arange(3),
+            "lon": np.arange(4),
+        },
+    )
+    source = tmp_path / "batch.zarr"
+    ds.to_zarr(source, encoding={"PRESsfc": {"chunks": (1, 2, 3, 4)}})
+    dest = tmp_path / "dest.zarr"
+    append_predictions_to_zarr(
+        str(source),
+        str(dest),
+        sample_chunks=120,
+        sample_shards=None,
+        source_is_netcdf=False,
+    )
+    result = xr.open_zarr(dest, decode_timedelta=False)
+    try:
+        assert result.sizes["sample"] == n_batch
+        assert result["PRESsfc"].encoding["chunks"][0] == n_batch
+    finally:
+        result.close()
 
 
 class PlusOne(torch.nn.Module):

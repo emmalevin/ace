@@ -9,8 +9,9 @@
 #SBATCH --mem=128G
 #SBATCH --time=1:00:00
 #SBATCH --account=gvecchi
-##SBATCH --reservation=hackathon
-##SBATCH --constraint=a100
+#SBATCH --reservation=hackathon
+#SBATCH --constraint=a100
+#SBATCH --exclusive
 
 module purge
 module load anaconda3/2025.6
@@ -19,11 +20,16 @@ module load cudatoolkit/13.1
 
 export WANDB_JOB_TYPE=disabled
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+export NCCL_SHM_DISABLE=1
+export NCCL_P2P_DISABLE=1
+export CUDA_DEVICE_ORDER=PCI_BUS_ID
+export NCCL_DEBUG=INFO
 
 export MASTER_PORT=$((20000 + SLURM_JOB_ID % 40000))
 echo "MASTER_PORT=$MASTER_PORT"
 
 YAML_FILE=/scratch/gpfs/GVECCHI/el2358/ace/hurritrain/code/yaml/model2_train_initial.yaml
 
-torchrun --master_port=$MASTER_PORT \
+sleep 15
+srun torchrun --master_port=$MASTER_PORT \
     -m fme.ace.train "$YAML_FILE"

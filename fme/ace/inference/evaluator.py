@@ -19,7 +19,13 @@ from fme.ace.data_loading.getters import get_inference_data
 from fme.ace.data_loading.inference import ExplicitIndices, InferenceDataLoaderConfig
 from fme.ace.inference.data_writer import DataWriterConfig, PairedDataWriter
 from fme.ace.inference.data_writer.dataset_metadata import DatasetMetadata
+from fme.ace.inference.data_writer.file_writer import FileWriterConfig
 from fme.ace.inference.data_writer.time_coarsen import TimeCoarsenConfig
+from fme.ace.inference.data_writer.zarr import (
+    LEAD_TIME_UNITS,
+    ZarrWriterConfig,
+    _get_ace_time_coords,
+)
 from fme.ace.inference.default_metadata import get_default_variable_metadata
 from fme.ace.inference.loop import DeriverABC, run_dataset_comparison
 from fme.ace.stepper import (
@@ -40,6 +46,7 @@ from fme.core.generics.inference import get_record_to_wandb, run_inference
 from fme.core.logging_utils import LoggingConfig
 from fme.core.timing import GlobalTimer
 from fme.core.typing_ import TensorDict, TensorMapping
+from fme.core.writer import ZarrWriter
 
 
 def validate_time_coarsen_config(
@@ -131,6 +138,8 @@ class InferenceEvaluatorConfig:
             This should be used with caution, as it may allow the stepper to make
             scientifically invalid predictions, but it can allow running inference with
             incorrectly formatted or missing grid information.
+        inference_only: If True, skip evaluation diagnostics and NetCDF outputs;
+            predictions are written directly to zarr.
     """
 
     experiment_dir: str
@@ -148,8 +157,13 @@ class InferenceEvaluatorConfig:
     )
     stepper_override: StepperOverrideConfig | None = None
     allow_incompatible_dataset: bool = False
+    inference_only: bool = False
 
     def __post_init__(self):
+        if self.inference_only and self.prediction_loader is not None:
+            raise ValueError(
+                "inference_only cannot be used with prediction_loader."
+            )
         if self.data_writer.time_coarsen is not None:
             validate_time_coarsen_config(
                 self.data_writer.time_coarsen,
@@ -184,13 +198,32 @@ class InferenceEvaluatorConfig:
         logging.info(f"Loading trained model checkpoint from {self.checkpoint_path}")
         return load_stepper_config(self.checkpoint_path, self.stepper_override)
 
+    def get_effective_data_writer_config(self) -> DataWriterConfig:
+        if not self.inference_only:
+            return self.data_writer
+        names = self.data_writer.names
+        return DataWriterConfig(
+            save_prediction_files=False,
+            save_monthly_files=False,
+            files=[
+                FileWriterConfig(
+                    label="autoregressive",
+                    names=list(names) if names is not None else None,
+                    save_reference=False,
+                    time_coarsen=self.data_writer.time_coarsen,
+                    format=ZarrWriterConfig(),
+                )
+            ],
+        )
+
     def get_data_writer(
         self,
         timestep: datetime.timedelta,
         variable_metadata: Mapping[str, VariableMetadata],
         coords: Mapping[str, np.ndarray],
     ) -> PairedDataWriter:
-        return self.data_writer.build_paired(
+        data_writer_config = self.get_effective_data_writer_config()
+        return data_writer_config.build_paired(
             experiment_dir=self.experiment_dir,
             n_initial_conditions=self.loader.n_initial_conditions,
             n_timesteps=self.n_forward_steps,
@@ -243,6 +276,158 @@ class _Deriver(DeriverABC):
         return data.remove_initial_condition(self._n_ic_timesteps)
 
 
+class _NullInferenceAggregator:
+    def record_initial_condition(self, initial_condition):
+        return []
+
+    def record_batch(self, data):
+        return []
+
+    def get_summary_logs(self):
+        return {}
+
+    def flush_diagnostics(self, subdir: str | None = None):
+        pass
+
+
+class _InferenceOnlyWriter:
+    def __init__(self, writer: PairedDataWriter):
+        self._writer = writer
+
+    def write(self, data, filename: str):
+        logging.info("Skipping %s write for inference_only=True.", filename)
+
+    def append_batch(self, batch):
+        self._writer.append_batch(batch=batch)
+
+    def finalize(self):
+        self._writer.finalize()
+
+
+class _DirectZarrPredictionWriter:
+    def __init__(
+        self,
+        path: str,
+        sample_start: int,
+        n_initial_conditions: int,
+        n_timesteps: int,
+        coords: Mapping[str, np.ndarray],
+        variable_metadata: Mapping[str, VariableMetadata],
+        names: Sequence[str] | None,
+        sample_chunk: int,
+    ):
+        self.path = path
+        self.sample_start = sample_start
+        self.n_initial_conditions = n_initial_conditions
+        self.n_timesteps = n_timesteps
+        self.coords = coords
+        self.variable_metadata = variable_metadata
+        self.names = names
+        self.sample_chunk = sample_chunk
+        self._writer: ZarrWriter | None = None
+        self._n_timesteps_seen = 0
+
+    def write(self, data, filename: str):
+        logging.info("Skipping %s write for inference_only=True.", filename)
+
+    def _initialize_writer(self, batch):
+        lead_times_coord, _, _ = _get_ace_time_coords(batch.time, self.n_timesteps)
+        spatial_dims = ("face", "height", "width") if "face" in self.coords else ("lat", "lon")
+        coords = {
+            dim: self.coords[dim]
+            for dim in spatial_dims
+            if dim in self.coords
+        }
+        coords.update(
+            {
+                "sample": np.arange(self.n_initial_conditions),
+                "time": lead_times_coord,
+            }
+        )
+        attrs = {
+            name: {
+                "units": self.variable_metadata[name].units,
+                "long_name": self.variable_metadata[name].long_name,
+            }
+            for name in (self.names or batch.prediction.keys())
+            if name in self.variable_metadata
+        }
+        self._writer = ZarrWriter(
+            path=self.path,
+            dims=("sample", "time", *spatial_dims),
+            coords=coords,
+            data_vars=list(self.names) if self.names is not None else None,
+            chunks={"sample": self.sample_chunk, "time": self.n_timesteps},
+            array_attributes=attrs,
+            group_attributes=DatasetMetadata.from_env().as_flat_str_dict(),
+            time_units=LEAD_TIME_UNITS,
+            time_calendar=None,
+            mode="w" if self.sample_start == 0 else "a",
+            overwrite_check=False,
+        )
+
+    def append_batch(self, batch):
+        if self._writer is None:
+            self._initialize_writer(batch)
+        sample_stop = self.sample_start + batch.time.sizes["sample"]
+        time_stop = self._n_timesteps_seen + batch.time.sizes["time"]
+        data = {
+            name: tensor.detach().cpu().numpy()
+            for name, tensor in batch.prediction.items()
+            if self.names is None or name in self.names
+        }
+        self._writer.record_batch(
+            data=data,
+            position_slices={
+                "sample": slice(self.sample_start, sample_stop),
+                "time": slice(self._n_timesteps_seen, time_stop),
+            },
+        )
+        self._n_timesteps_seen = time_stop
+
+    def finalize(self):
+        pass
+
+
+def _build_inference_aggregator(
+    config: InferenceEvaluatorConfig,
+    data,
+    dataset_info,
+    stepper,
+    stepper_config: StepperConfig,
+):
+    if config.inference_only:
+        return _NullInferenceAggregator()
+    aggregator_config: InferenceEvaluatorAggregatorConfig = config.aggregator
+    for batch in data.loader:
+        initial_time = batch.time.isel(time=0)
+        break
+    return aggregator_config.build(
+        dataset_info=dataset_info,
+        record_step_20=config.n_forward_steps >= 20,
+        n_timesteps=config.n_forward_steps + stepper_config.n_ic_timesteps,
+        initial_time=initial_time,
+        channel_mean_names=stepper.loss_names,
+        normalize=stepper.normalizer.normalize,
+        output_dir=config.experiment_dir,
+    )
+
+
+def _prepare_inference_writer(
+    config: InferenceEvaluatorConfig,
+    data,
+    variable_metadata: Mapping[str, VariableMetadata],
+):
+    writer = config.get_data_writer(
+        timestep=data.timestep,
+        variable_metadata=variable_metadata,
+        coords=data.coords,
+    )
+    if config.inference_only:
+        return _InferenceOnlyWriter(writer)
+    return writer
+
+
 def run_evaluator_from_config(config: InferenceEvaluatorConfig):
     timer = GlobalTimer.get_instance()
     timer.start_outer("inference")
@@ -289,31 +474,20 @@ def run_evaluator_from_config(config: InferenceEvaluatorConfig):
                 f"error. The incompatiblity found was: {str(err)}"
             ) from err
 
-    aggregator_config: InferenceEvaluatorAggregatorConfig = config.aggregator
-    for batch in data.loader:
-        initial_time = batch.time.isel(time=0)
-        break
     variable_metadata = resolve_variable_metadata(
         dataset_metadata=data.variable_metadata,
         stepper_metadata=stepper.training_variable_metadata,
         stepper_all_names=stepper_config.all_names,
     )
     dataset_info = data.dataset_info.update_variable_metadata(variable_metadata)
-    aggregator = aggregator_config.build(
+    aggregator = _build_inference_aggregator(
+        config=config,
+        data=data,
         dataset_info=dataset_info,
-        record_step_20=config.n_forward_steps >= 20,
-        n_timesteps=config.n_forward_steps + stepper_config.n_ic_timesteps,
-        initial_time=initial_time,
-        channel_mean_names=stepper.loss_names,
-        normalize=stepper.normalizer.normalize,
-        output_dir=config.experiment_dir,
+        stepper=stepper,
+        stepper_config=stepper_config,
     )
-
-    writer = config.get_data_writer(
-        timestep=data.timestep,
-        variable_metadata=variable_metadata,
-        coords=data.coords,
-    )
+    writer = _prepare_inference_writer(config, data, variable_metadata)
 
     timer.stop()
     logging.info("Starting inference")
@@ -349,8 +523,11 @@ def run_evaluator_from_config(config: InferenceEvaluatorConfig):
     timer.start("final_writer_flush")
     logging.info("Starting final flush of data writer")
     writer.finalize()
-    logging.info("Writing reduced metrics to disk in netcdf format.")
-    aggregator.flush_diagnostics()
+    if config.inference_only:
+        logging.info("Skipping evaluation diagnostics for inference_only=True.")
+    else:
+        logging.info("Writing reduced metrics to disk in netcdf format.")
+        aggregator.flush_diagnostics()
     timer.stop()
 
     timer.stop_outer("inference")
@@ -406,9 +583,8 @@ def set_chunks_and_shards_encoding(
 @dataclasses.dataclass
 class BatchedEnsembleEvaluatorConfig:
     base_evaluator_config: InferenceEvaluatorConfig
-    batch_size: int
-    sample_chunks: int = 120
-    sample_shards: int | None = None
+    batch_size: int = 64
+    sample_chunk: int = 64
 
 
 def run_batched_ensemble_evaluator_from_config(config: BatchedEnsembleEvaluatorConfig):
@@ -450,14 +626,20 @@ def run_batched_ensemble_evaluator_from_config(config: BatchedEnsembleEvaluatorC
     stepper = base_evaluator_config.load_stepper()
     stepper.set_eval()
     timer.stop()
-    for i, batch in enumerate(
-        batched(base_evaluator_config.loader.start_indices.list, n=batch_size)
-    ):
-        with tempfile.TemporaryDirectory() as temp_dir:
+    sample_start = 0
+    for batch in batched(base_evaluator_config.loader.start_indices.list, n=batch_size):
+        if base_evaluator_config.inference_only:
+            batch_config = copy.deepcopy(base_evaluator_config)
+            batch_config.loader.start_indices = ExplicitIndices(list(batch))
+            batch_config.experiment_dir = base_evaluator_config.experiment_dir
+        else:
+            temp_context = tempfile.TemporaryDirectory()
+            temp_dir = temp_context.__enter__()
             batch_config = copy.deepcopy(base_evaluator_config)
             batch_config.loader.start_indices = ExplicitIndices(list(batch))
             batch_config.experiment_dir = os.path.join(temp_dir)
             os.makedirs(batch_config.experiment_dir, exist_ok=True)
+        try:
             data = get_inference_data(
                 config=batch_config.loader,
                 total_forward_steps=batch_config.n_forward_steps,
@@ -466,34 +648,37 @@ def run_batched_ensemble_evaluator_from_config(config: BatchedEnsembleEvaluatorC
                 xarray_dataset=dataset,
             )
 
-            aggregator_config: InferenceEvaluatorAggregatorConfig = (
-                batch_config.aggregator
-            )
-            for batch in data.loader:
-                initial_time = batch.time.isel(time=0)
-                break
             variable_metadata = resolve_variable_metadata(
                 dataset_metadata=data.variable_metadata,
                 stepper_metadata=stepper.training_variable_metadata,
                 stepper_all_names=stepper_config.all_names,
             )
             dataset_info = data.dataset_info.update_variable_metadata(variable_metadata)
-            aggregator = aggregator_config.build(
+            aggregator = _build_inference_aggregator(
+                config=batch_config,
+                data=data,
                 dataset_info=dataset_info,
-                record_step_20=batch_config.n_forward_steps >= 20,
-                n_timesteps=batch_config.n_forward_steps
-                + stepper_config.n_ic_timesteps,
-                initial_time=initial_time,
-                channel_mean_names=stepper.loss_names,
-                normalize=stepper.normalizer.normalize,
-                output_dir=batch_config.experiment_dir,
+                stepper=stepper,
+                stepper_config=stepper_config,
             )
-
-            writer = batch_config.get_data_writer(
-                timestep=data.timestep,
-                variable_metadata=variable_metadata,
-                coords=data.coords,
-            )
+            if base_evaluator_config.inference_only:
+                writer = _DirectZarrPredictionWriter(
+                    path=os.path.join(
+                        base_evaluator_config.experiment_dir,
+                        "autoregressive_predictions.zarr",
+                    ),
+                    sample_start=sample_start,
+                    n_initial_conditions=base_evaluator_config.loader.n_initial_conditions,
+                    n_timesteps=base_evaluator_config.n_forward_steps,
+                    coords=data.coords,
+                    variable_metadata=variable_metadata,
+                    names=base_evaluator_config.data_writer.names,
+                    sample_chunk=config.sample_chunk,
+                )
+            else:
+                writer = _prepare_inference_writer(
+                    batch_config, data, variable_metadata
+                )
 
             logging.info("Starting inference")
             record_logs = get_record_to_wandb(label="inference")
@@ -509,44 +694,58 @@ def run_batched_ensemble_evaluator_from_config(config: BatchedEnsembleEvaluatorC
             timer.start("final_writer_flush")
             logging.info("Starting final flush of data writer")
             writer.finalize()
-            logging.info("Writing reduced metrics to disk in netcdf format.")
-            aggregator.flush_diagnostics()
-            timer.stop()
-
-            timer.start("zarr_append")
-            predictions_netcdf = os.path.join(temp_dir, "autoregressive_predictions.nc")
-            predictions_zarr = os.path.join(
-                base_evaluator_config.experiment_dir, "autoregressive_predictions.zarr"
-            )
-
-            target_netcdf = os.path.join(temp_dir, "autoregressive_target.nc")
-            target_zarr = os.path.join(
-                base_evaluator_config.experiment_dir, "autoregressive_target.zarr"
-            )
-
-            if os.path.exists(predictions_zarr):
-                ds = xr.open_dataset(predictions_netcdf, decode_timedelta=False)
-                ds.to_zarr(predictions_zarr, append_dim="sample", mode="a")
-
-                ds = xr.open_dataset(target_netcdf, decode_timedelta=False)
-                ds.to_zarr(target_zarr, append_dim="sample", mode="a")
+            if base_evaluator_config.inference_only:
+                logging.info("Skipping evaluation diagnostics for inference_only=True.")
             else:
-                ds = xr.open_dataset(predictions_netcdf, decode_timedelta=False)
-                ds = set_chunks_and_shards_encoding(
-                    ds,
-                    sample_chunks=config.sample_chunks,
-                    sample_shards=config.sample_shards,
-                )
-                ds.to_zarr(predictions_zarr)
-
-                ds = xr.open_dataset(target_netcdf, decode_timedelta=False)
-                ds = set_chunks_and_shards_encoding(
-                    ds,
-                    sample_chunks=config.sample_chunks,
-                    sample_shards=config.sample_shards,
-                )
-                ds.to_zarr(target_zarr)
+                logging.info("Writing reduced metrics to disk in netcdf format.")
+                aggregator.flush_diagnostics()
             timer.stop()
+
+            if not base_evaluator_config.inference_only:
+                timer.start("zarr_append")
+                predictions_netcdf = os.path.join(
+                    temp_dir, "autoregressive_predictions.nc"
+                )
+                predictions_zarr = os.path.join(
+                    base_evaluator_config.experiment_dir,
+                    "autoregressive_predictions.zarr",
+                )
+                target_netcdf = os.path.join(temp_dir, "autoregressive_target.nc")
+                target_zarr = os.path.join(
+                    base_evaluator_config.experiment_dir,
+                    "autoregressive_target.zarr",
+                )
+                if os.path.exists(predictions_zarr):
+                    ds = xr.open_dataset(predictions_netcdf, decode_timedelta=False)
+                    ds.to_zarr(predictions_zarr, append_dim="sample", mode="a")
+                    ds.close()
+
+                    ds = xr.open_dataset(target_netcdf, decode_timedelta=False)
+                    ds.to_zarr(target_zarr, append_dim="sample", mode="a")
+                    ds.close()
+                else:
+                    ds = xr.open_dataset(predictions_netcdf, decode_timedelta=False)
+                    ds = set_chunks_and_shards_encoding(
+                        ds,
+                        sample_chunks=config.sample_chunk,
+                        sample_shards=None,
+                    )
+                    ds.to_zarr(predictions_zarr)
+                    ds.close()
+
+                    ds = xr.open_dataset(target_netcdf, decode_timedelta=False)
+                    ds = set_chunks_and_shards_encoding(
+                        ds,
+                        sample_chunks=config.sample_chunk,
+                        sample_shards=None,
+                    )
+                    ds.to_zarr(target_zarr)
+                    ds.close()
+                timer.stop()
+            sample_start += len(batch)
+        finally:
+            if not base_evaluator_config.inference_only:
+                temp_context.__exit__(None, None, None)
 
     timer.stop_outer("inference")
     total_steps = (

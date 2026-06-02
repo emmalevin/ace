@@ -28,9 +28,12 @@ from training_runner import (
     submit_batched_training_jobs,
 )
 from yaml_utils import (
+    get_yaml_experiment_dir,
     load_active_sampling_config,
     read_fast_inference_n_forward_steps,
+    set_yaml_max_epochs,
     update_fast_inference_indices_for_both,
+    update_yaml_max_epochs,
     update_yaml_training_indices,
 )
 
@@ -59,6 +62,7 @@ def main_loop(
         "/scratch/gpfs/GVECCHI/el2358/ace/hurritrain/probability_data/kde_pdf_values_h500_1940.npy"
     ),
     inference_output_dir: str | None = None,
+    initial_max_epochs: int = 4,
 ):
     """
     Main loop for active learning algorithm.
@@ -115,6 +119,25 @@ def main_loop(
         os.path.join(yaml_dir, "model1_fast_inference.yaml"),
         os.path.join(yaml_dir, "model2_fast_inference.yaml"),
     ]
+
+    # Fresh-start reset: reset max_epochs in each training YAML and delete any
+    # existing model checkpoints so this run trains from scratch.
+    print(f"\nResetting for fresh run (initial_max_epochs={initial_max_epochs})...")
+    for training_yaml_file in training_yaml_files:
+        if not os.path.exists(training_yaml_file):
+            continue
+        set_yaml_max_epochs(training_yaml_file, initial_max_epochs)
+        print(f"Reset max_epochs to {initial_max_epochs} in {training_yaml_file}")
+        exp_dir = get_yaml_experiment_dir(training_yaml_file)
+        if exp_dir:
+            ckpt_dir = Path(exp_dir) / "training_checkpoints"
+            if ckpt_dir.is_dir():
+                deleted = 0
+                for ckpt_file in ckpt_dir.glob("*.tar"):
+                    ckpt_file.unlink()
+                    deleted += 1
+                if deleted:
+                    print(f"Deleted {deleted} checkpoint file(s) from {ckpt_dir}")
 
     # Before loop: Generate initial list of indices
     print(f"Generating initial list of {n_initial_indices} random time indices...")
@@ -184,6 +207,8 @@ def main_loop(
         if not model1_train_script.exists() or not model2_train_script.exists():
             print("Warning: Training batch scripts not found; skipping training.")
         else:
+            # Note: max_epochs was set to initial_max_epochs above; initial training
+            # runs that many epochs from a fresh checkpoint. No bump here.
             try:
                 t0 = time.time()
                 submit_batched_training_jobs(
@@ -291,6 +316,9 @@ def main_loop(
         if not model1_train_script.exists() or not model2_train_script.exists():
             print("Warning: Training batch scripts not found; skipping training.")
         else:
+            for training_yaml_file in [f for f in training_yaml_files if os.path.exists(f)]:
+                new_max = update_yaml_max_epochs(training_yaml_file, increment=1)
+                print(f"Bumped max_epochs to {new_max} in {training_yaml_file}")
             try:
                 t0 = time.time()
                 submit_batched_training_jobs(
@@ -367,4 +395,5 @@ if __name__ == "__main__":
         inference_output_dir=cfg["inference_output_dir"]
         if cfg.get("inference_output_dir")
         else None,
+        initial_max_epochs=int(cfg.get("initial_max_epochs", 4)),
     )

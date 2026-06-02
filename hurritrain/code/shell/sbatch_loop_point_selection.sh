@@ -9,8 +9,7 @@
 #SBATCH --mem=64G
 #SBATCH --time=08:00:00
 #SBATCH --account=gvecchi
-##SBATCH --reservation=hackathon
-##SBATCH --constraint=a100
+#SBATCH --reservation=hackathon
 
 
 # Active learning driver: updates YAMLs, sbatch/waits for training and inference jobs.
@@ -28,10 +27,8 @@ CONFIG="/scratch/gpfs/GVECCHI/el2358/ace/hurritrain/code/yaml/active_sampling.ya
 module purge
 module load anaconda3/2025.6
 conda activate geoclim
-module load cudatoolkit/13.1
 
 export WANDB_JOB_TYPE=disabled
 
 cd /scratch/gpfs/GVECCHI/el2358/ace/hurritrain/code/python
-/usr/local/bin/nsys profile -o timeline_output_v1_may26 --trace cuda,nvtx,osrt python loop_point_selection.py --config "${CONFIG}"
-#python loop_point_selection.py --config "${CONFIG}"
+python loop_point_selection.py --config "${CONFIG}"

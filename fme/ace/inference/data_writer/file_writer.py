@@ -170,6 +170,11 @@ class FileWriterConfig:
     )
     separate_ensemble_members: bool = False
 
+    def paired_prediction_zarr_path(self, experiment_dir: str) -> str:
+        """Zarr path written by :meth:`build_paired` for prediction output."""
+        label = f"{self.label}_predictions"
+        return os.path.join(experiment_dir, f"{label}.zarr")
+
     def __post_init__(self):
         if self.lat_extent:
             if len(self.lat_extent) != 2:
