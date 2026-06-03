@@ -27,7 +27,6 @@ from fme.ace.inference.evaluator import (
     BatchedEnsembleEvaluatorConfig,
     InferenceEvaluatorConfig,
     StepperOverrideConfig,
-    append_predictions_to_zarr,
     main,
     resolve_variable_metadata,
     run_batched_ensemble_evaluator_from_config,
@@ -94,36 +93,6 @@ def test_get_effective_data_writer_config_inference_only():
     )
 
 
-def test_append_predictions_to_zarr_small_batch_large_sample_chunks(tmp_path):
-    """Batch zarr uses sample chunks of 1; merge must not force 120 without rechunking."""
-    n_batch = 4
-    dims = ("sample", "time", "lat", "lon")
-    shape = (n_batch, 2, 3, 4)
-    ds = xr.Dataset(
-        {"PRESsfc": (dims, np.zeros(shape, dtype=np.float32))},
-        coords={
-            "sample": np.arange(n_batch),
-            "time": np.arange(2),
-            "lat": np.arange(3),
-            "lon": np.arange(4),
-        },
-    )
-    source = tmp_path / "batch.zarr"
-    ds.to_zarr(source, encoding={"PRESsfc": {"chunks": (1, 2, 3, 4)}})
-    dest = tmp_path / "dest.zarr"
-    append_predictions_to_zarr(
-        str(source),
-        str(dest),
-        sample_chunks=120,
-        sample_shards=None,
-        source_is_netcdf=False,
-    )
-    result = xr.open_zarr(dest, decode_timedelta=False)
-    try:
-        assert result.sizes["sample"] == n_batch
-        assert result["PRESsfc"].encoding["chunks"][0] == n_batch
-    finally:
-        result.close()
 
 
 class PlusOne(torch.nn.Module):

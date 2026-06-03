@@ -5,7 +5,7 @@ import logging
 import os
 import tempfile
 from collections.abc import Callable, Mapping, Sequence
-
+import nvtx
 import dacite
 import numpy as np
 import torch
@@ -332,18 +332,13 @@ class _DirectZarrPredictionWriter:
 
     def _initialize_writer(self, batch):
         lead_times_coord, _, _ = _get_ace_time_coords(batch.time, self.n_timesteps)
-        spatial_dims = ("face", "height", "width") if "face" in self.coords else ("lat", "lon")
-        coords = {
-            dim: self.coords[dim]
-            for dim in spatial_dims
-            if dim in self.coords
-        }
-        coords.update(
-            {
-                "sample": np.arange(self.n_initial_conditions),
-                "time": lead_times_coord,
-            }
+        spatial_dims = (
+            ("face", "height", "width")
+            if "face" in self.coords
+            else ("lat", "lon")
         )
+        coords = {dim: self.coords[dim] for dim in spatial_dims if dim in self.coords}
+        coords.update({"sample": np.arange(self.n_initial_conditions), "time": lead_times_coord})
         attrs = {
             name: {
                 "units": self.variable_metadata[name].units,
@@ -627,6 +622,7 @@ def run_batched_ensemble_evaluator_from_config(config: BatchedEnsembleEvaluatorC
     stepper.set_eval()
     timer.stop()
     sample_start = 0
+    start_range = nvtx.start_range("batched_ensemble_evaluator", color="red")
     for batch in batched(base_evaluator_config.loader.start_indices.list, n=batch_size):
         if base_evaluator_config.inference_only:
             batch_config = copy.deepcopy(base_evaluator_config)
@@ -637,8 +633,7 @@ def run_batched_ensemble_evaluator_from_config(config: BatchedEnsembleEvaluatorC
             temp_dir = temp_context.__enter__()
             batch_config = copy.deepcopy(base_evaluator_config)
             batch_config.loader.start_indices = ExplicitIndices(list(batch))
-            batch_config.experiment_dir = os.path.join(temp_dir)
-            os.makedirs(batch_config.experiment_dir, exist_ok=True)
+            batch_config.experiment_dir = temp_dir
         try:
             data = get_inference_data(
                 config=batch_config.loader,
@@ -746,7 +741,7 @@ def run_batched_ensemble_evaluator_from_config(config: BatchedEnsembleEvaluatorC
         finally:
             if not base_evaluator_config.inference_only:
                 temp_context.__exit__(None, None, None)
-
+    nvtx.end_range(start_range)
     timer.stop_outer("inference")
     total_steps = (
         base_evaluator_config.n_forward_steps * base_evaluator_config.loader.n_initial_conditions
