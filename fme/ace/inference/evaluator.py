@@ -624,16 +624,22 @@ def run_batched_ensemble_evaluator_from_config(config: BatchedEnsembleEvaluatorC
     sample_start = 0
     start_range = nvtx.start_range("batched_ensemble_evaluator", color="red")
     for batch in batched(base_evaluator_config.loader.start_indices.list, n=batch_size):
+        batch_loader = dataclasses.replace(
+            base_evaluator_config.loader,
+            start_indices=ExplicitIndices(list(batch)),
+        )
         if base_evaluator_config.inference_only:
-            batch_config = copy.deepcopy(base_evaluator_config)
-            batch_config.loader.start_indices = ExplicitIndices(list(batch))
-            batch_config.experiment_dir = base_evaluator_config.experiment_dir
+            batch_config = dataclasses.replace(
+                base_evaluator_config, loader=batch_loader
+            )
         else:
             temp_context = tempfile.TemporaryDirectory()
             temp_dir = temp_context.__enter__()
-            batch_config = copy.deepcopy(base_evaluator_config)
-            batch_config.loader.start_indices = ExplicitIndices(list(batch))
-            batch_config.experiment_dir = temp_dir
+            batch_config = dataclasses.replace(
+                base_evaluator_config,
+                loader=batch_loader,
+                experiment_dir=temp_dir,
+            )
         try:
             data = get_inference_data(
                 config=batch_config.loader,
