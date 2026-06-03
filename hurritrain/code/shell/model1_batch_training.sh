@@ -5,9 +5,9 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:2
 #SBATCH --mem=128G
-#SBATCH --time=1:00:00
+#SBATCH --time=2:00:00
 #SBATCH --account=gvecchi
 #SBATCH --reservation=hackathon
 #SBATCH --constraint=a100
@@ -29,5 +29,5 @@ echo "MASTER_PORT=$MASTER_PORT"
 
 YAML_FILE=/scratch/gpfs/GVECCHI/el2358/ace/hurritrain/code/yaml/model1_train_initial.yaml
 
-srun /usr/local/bin/nsys profile -o timeline_output_training_m1 --force-overwrite true --trace cuda,nvtx,osrt torchrun  --master_port=$MASTER_PORT \
+srun /usr/local/bin/nsys profile -o timeline_output_training_m1 --force-overwrite true --trace cuda,nvtx,osrt --target-processes=all torchrun  --master_port=$MASTER_PORT --nproc_per_node=2 \
     -m fme.ace.train "$YAML_FILE"
