@@ -158,6 +158,7 @@ class InferenceEvaluatorConfig:
     stepper_override: StepperOverrideConfig | None = None
     allow_incompatible_dataset: bool = False
     inference_only: bool = False
+    compute_derived_variables: bool = True
 
     def __post_init__(self):
         if self.inference_only and self.prediction_loader is not None:
@@ -690,6 +691,7 @@ def run_batched_ensemble_evaluator_from_config(config: BatchedEnsembleEvaluatorC
                 aggregator=aggregator,
                 writer=writer,
                 record_logs=record_logs,
+                compute_derived_variables=base_evaluator_config.compute_derived_variables,
             )
 
             timer.start("final_writer_flush")
