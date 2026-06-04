@@ -1,20 +1,14 @@
 experiment_dir: /scratch/gpfs/GVECCHI/el2358/ace/hurritrain/training_output/model1_wandb
 save_checkpoint: true
+save_restart_every_n_epochs: 999
 validate_using_ema: true
-max_epochs: 1
+max_epochs: 5
 n_forward_steps: 2
 seed: 42
-inference:
-  n_forward_steps: 2
-  forward_steps_in_memory: 50
-  loader:
-    start_indices:
-      first: 0
-      n_initial_conditions: 1
-      interval: 1460
-    dataset:
-      data_path: /scratch/gpfs/GVECCHI/el2358/ace/training_data
-    num_data_workers: 4
+inference: null
+validation_aggregator:
+  log_snapshots: false
+  log_mean_maps: false
 logging:
   log_to_screen: true
   log_to_wandb: false
@@ -22,25 +16,7 @@ logging:
   project: ace
   entity: your_wandb_entity
 train_loader:
-  batch_size: 1
-  num_data_workers: 4
-  prefetch_factor: 4
-  dataset:
-    data_path: /scratch/gpfs/GVECCHI/el2358/ace/training_data
-    infer_timestep: false
-    subset:
-    - 7
-    - 46
-    - 50
-    - 99
-    - 115
-    - 125
-    - 133
-    - 193
-    - 322
-    - 346
-validation_loader:
-  batch_size: 1
+  batch_size: 2
   num_data_workers: 4
   prefetch_factor: 4
   dataset:
@@ -48,10 +24,72 @@ validation_loader:
     infer_timestep: false
     subset:
     - 0
+    - 29
+    - 58
+    - 87
+    - 116
+    - 145
+    - 174
+    - 203
+    - 232
+    - 261
+    - 290
+    - 319
+    - 348
+    - 377
+    - 406
+    - 435
+    - 464
+    - 493
+    - 522
+    - 551
+    - 580
+    - 609
+    - 638
+    - 667
+    - 696
+    - 725
+    - 754
+    - 783
+    - 812
+    - 841
+    - 870
+    - 899
+    - 928
+    - 957
+    - 986
+    - 1015
+    - 1044
+    - 1073
+    - 1102
+    - 1131
+    - 1160
+    - 1189
+    - 1218
+    - 1247
+    - 1276
+    - 1305
+    - 1334
+    - 1363
+    - 1392
+    - 1421
+validation_loader:
+  batch_size: 2
+  num_data_workers: 4
+  prefetch_factor: 4
+  dataset:
+    data_path: /scratch/gpfs/GVECCHI/el2358/ace/training_data
+    infer_timestep: false
+    subset:
+    - 0
+    - 730
 optimization:
   enable_automatic_mixed_precision: false
   lr: 0.0001
   optimizer_type: AdamW
+  kwargs:
+    fused: true
+    weight_decay: 0.01
 stepper:
   loss:
     type: MSE

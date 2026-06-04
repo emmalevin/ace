@@ -1,20 +1,14 @@
 experiment_dir: /scratch/gpfs/GVECCHI/el2358/ace/hurritrain/training_output/model2_wandb
 save_checkpoint: true
+save_restart_every_n_epochs: 999
 validate_using_ema: true
-max_epochs: 1
+max_epochs: 2
 n_forward_steps: 2
 seed: 43
-inference:
-  n_forward_steps: 2
-  forward_steps_in_memory: 50
-  loader:
-    start_indices:
-      first: 0
-      n_initial_conditions: 1
-      interval: 1460
-    dataset:
-      data_path: /scratch/gpfs/GVECCHI/el2358/ace/training_data
-    num_data_workers: 4
+inference: null
+validation_aggregator:
+  log_snapshots: false
+  log_mean_maps: false
 logging:
   log_to_screen: true
   log_to_wandb: false
@@ -29,16 +23,21 @@ train_loader:
     data_path: /scratch/gpfs/GVECCHI/el2358/ace/training_data
     infer_timestep: false
     subset:
-    - 7
-    - 46
-    - 50
-    - 99
-    - 115
-    - 125
-    - 133
-    - 193
-    - 322
-    - 346
+    - 218
+    - 413
+    - 522
+    - 614
+    - 649
+    - 887
+    - 892
+    - 1036
+    - 1106
+    - 1161
+    - 878
+    - 872
+    - 879
+    - 876
+    - 871
 validation_loader:
   batch_size: 1
   num_data_workers: 4
@@ -52,6 +51,9 @@ optimization:
   enable_automatic_mixed_precision: false
   lr: 0.0001
   optimizer_type: AdamW
+  kwargs:
+    fused: true
+    weight_decay: 0.01
 stepper:
   loss:
     type: MSE

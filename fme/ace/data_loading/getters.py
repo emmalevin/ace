@@ -1,7 +1,6 @@
 import logging
 
 import torch.utils.data
-import nvtx
 
 from fme.ace.data_loading.batch_data import BatchData
 from fme.ace.data_loading.dataloader import get_data_loader

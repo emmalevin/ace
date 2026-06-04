@@ -6,6 +6,12 @@ n_initial_indices: 10
 seed: 42
 n_top: 5
 
+# Each loop run starts fresh: model checkpoints are deleted and max_epochs in the
+# training YAMLs is reset to this value. The initial training runs this many
+# epochs from scratch, and each subsequent iteration's training bumps max_epochs
+# by 1 (so one additional epoch per active-learning iteration).
+initial_max_epochs: 1
+
 data_path: /scratch/gpfs/GVECCHI/el2358/ace/training_data
 
 # Directory containing px/py KDE pickle files (load_probability_data).

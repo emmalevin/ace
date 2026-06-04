@@ -40,6 +40,7 @@ from yaml_utils import (
 torch.cuda.empty_cache()
 
 
+
 def _exit_on_job_failure(e: Exception, msg_prefix: str = "Stopping") -> None:
     """Print message and exit with code 1 on training or inference job failure."""
     print(f"\n{'='*60}")
@@ -49,7 +50,7 @@ def _exit_on_job_failure(e: Exception, msg_prefix: str = "Stopping") -> None:
 
 
 def main_loop(
-    n_iterations: int = 3,
+    n_iterations: int = 2,
     n_initial_indices: int = 10,
     data_path: str = "/scratch/gpfs/GVECCHI/el2358/ace/training_data",
     yaml_dir: str | None = None,

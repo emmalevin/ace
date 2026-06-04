@@ -1,6 +1,8 @@
 batch_size: 64
+sample_chunk: 64
 base_evaluator_config:
   inference_only: true
+  compute_derived_variables: false
   experiment_dir: /scratch/gpfs/GVECCHI/el2358/ace/hurritrain/inference_output/model2_inference
   n_forward_steps: 2
   forward_steps_in_memory: 2

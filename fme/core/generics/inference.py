@@ -1,7 +1,7 @@
 import logging
 from collections.abc import Callable, Iterator
 from typing import Generic, Protocol, TypeVar
-
+import nvtx
 from fme.core.generics.aggregator import InferenceAggregatorABC, InferenceLogs
 from fme.core.generics.data import InferenceDataABC
 from fme.core.generics.writer import NullDataWriter, WriterABC
@@ -60,11 +60,12 @@ class Looper(Generic[PS, FD, SD]):
         of forcing data. Also returns the forcing data.
         """
         timer = GlobalTimer.get_instance()
-        with timer.context("data_loading"):
-            try:
-                forcing_data = next(self._loader)
-            except StopIteration:
-                raise StopIteration
+        with nvtx.annotate("data_loading", color="green"):
+            with timer.context("data_loading"):
+                try:
+                    forcing_data = next(self._loader)
+                except StopIteration:
+                    raise StopIteration
         output_data, self._prognostic_state = self._predict(
             self._prognostic_state,
             forcing=forcing_data,
