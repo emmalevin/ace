@@ -203,6 +203,7 @@ class InferenceDataset(torch.utils.data.Dataset):
         surface_temperature_name: str | None = None,
         ocean_fraction_name: str | None = None,
         dataset: XarrayDataset | None = None,
+        ic_chunk_size: int | None = None,
     ):
         """
         Parameters:
@@ -215,6 +216,9 @@ class InferenceDataset(torch.utils.data.Dataset):
             surface_temperature_name: Name of the surface temperature variable.
             ocean_fraction_name: Name of the ocean fraction variable.
             dataset: if provided, use this dataset instead of creating a new one.
+            ic_chunk_size: if set, yield IC-chunks of this size per __getitem__
+                (chunk-major iteration: all windows of chunk 0, then all of chunk 1).
+                If None, behave as before — one __getitem__ returns all ICs.
         """
         self._label_override = (
             set(label_override) if label_override is not None else None
@@ -260,18 +264,32 @@ class InferenceDataset(torch.utils.data.Dataset):
                 SST perturbations require an ocean configuration."
             )
 
+        if ic_chunk_size is None or ic_chunk_size >= self._n_initial_conditions:
+            self._ic_chunk_size = self._n_initial_conditions
+            self._n_ic_chunks = 1
+        else:
+            self._ic_chunk_size = ic_chunk_size
+            self._n_ic_chunks = int(
+                ceil(self._n_initial_conditions / ic_chunk_size)
+            )
+        self._windows_per_chunk = int(
+            ceil(self._total_forward_steps / self._forward_steps_in_memory)
+        )
+
         self._persistence_data: BatchData | None = None
         if config.persistence_names is not None:
-            first_sample = self._get_batch_data(0)
+            first_sample = self._get_batch_data(0, 0)
             self._persistence_data = first_sample.subset_names(
                 config.persistence_names
             ).select_time_slice(slice(0, 1))
 
-    def _get_batch_data(self, index) -> BatchData:
+    def _get_batch_data(self, chunk_idx: int, window_idx: int) -> BatchData:
         dist = Distributed.get_instance()
-        i_start = index * self._forward_steps_in_memory
+        ic_start = chunk_idx * self._ic_chunk_size
+        ic_end = min(ic_start + self._ic_chunk_size, self._n_initial_conditions)
+        i_start = window_idx * self._forward_steps_in_memory
         sample_tuples = []
-        for i_member in range(self._n_initial_conditions):
+        for i_member in range(ic_start, ic_end):
             # check if sample is one this local rank should process
             if i_member % dist.world_size != dist.rank:
                 continue
@@ -314,20 +332,35 @@ class InferenceDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, index) -> BatchData:
         dist = Distributed.get_instance()
-        result = self._get_batch_data(index)
+        chunk_idx = index // self._windows_per_chunk
+        window_idx = index % self._windows_per_chunk
+        result = self._get_batch_data(chunk_idx, window_idx)
         if self._persistence_data is not None:
             updated_data = {}
             for key, value in self._persistence_data.data.items():
                 updated_data[key] = value.expand_as(result.data[key])
             result.data = {**result.data, **updated_data}
-        assert result.time.shape[0] == self._n_initial_conditions // dist.world_size
+        chunk_ic_count = min(
+            self._ic_chunk_size,
+            self._n_initial_conditions - chunk_idx * self._ic_chunk_size,
+        )
+        assert result.time.shape[0] == chunk_ic_count // dist.world_size
         return result
 
     def __len__(self) -> int:
-        # The ceil is necessary so if the last batch is smaller
-        # than the rest the ratio will be rounded up and the last batch
-        # will be included in the loading
-        return int(ceil(self._total_forward_steps / self._forward_steps_in_memory))
+        return self._n_ic_chunks * self._windows_per_chunk
+
+    @property
+    def n_ic_chunks(self) -> int:
+        return self._n_ic_chunks
+
+    @property
+    def windows_per_chunk(self) -> int:
+        return self._windows_per_chunk
+
+    @property
+    def ic_chunk_size(self) -> int:
+        return self._ic_chunk_size
 
     @property
     def properties(self) -> DatasetProperties:

@@ -643,8 +643,61 @@ def run_batched_ensemble_evaluator_from_config(config: BatchedEnsembleEvaluatorC
     timer.stop()
     sample_start = 0
     final_prediction_writer: _DirectZarrPredictionWriter | None = None
-    
+
+    if base_evaluator_config.inference_only:
+        with timer.context("chunk_get_inference_data"):
+            data = get_inference_data(
+                config=base_evaluator_config.loader,
+                total_forward_steps=base_evaluator_config.n_forward_steps,
+                window_requirements=window_requirements,
+                initial_condition=initial_condition_requirements,
+                xarray_dataset=dataset,
+                ic_chunk_size=batch_size,
+            )
+        variable_metadata = resolve_variable_metadata(
+            dataset_metadata=data.variable_metadata,
+            stepper_metadata=stepper.training_variable_metadata,
+            stepper_all_names=stepper_config.all_names,
+        )
+        dataset_info = data.dataset_info.update_variable_metadata(variable_metadata)
+        with timer.context("chunk_build_aggregator"):
+            aggregator = _build_inference_aggregator(
+                config=base_evaluator_config,
+                data=data,
+                dataset_info=dataset_info,
+                stepper=stepper,
+                stepper_config=stepper_config,
+            )
+        with timer.context("chunk_writer_init"):
+            final_prediction_writer = _DirectZarrPredictionWriter(
+                path=os.path.join(
+                    base_evaluator_config.experiment_dir,
+                    "autoregressive_predictions.zarr",
+                ),
+                sample_start=0,
+                n_initial_conditions=base_evaluator_config.loader.n_initial_conditions,
+                n_timesteps=base_evaluator_config.n_forward_steps,
+                coords=data.coords,
+                variable_metadata=variable_metadata,
+                names=base_evaluator_config.data_writer.names,
+                sample_chunk=config.sample_chunk,
+            )
+        logging.info("Starting inference (persistent loader)")
+        record_logs = get_record_to_wandb(label="inference")
+        start_range = nvtx.start_range("batched_ensemble_evaluator", color="red")
+        run_inference(
+            predict=stepper.predict_paired,
+            data=data,
+            aggregator=aggregator,
+            writer=final_prediction_writer,
+            record_logs=record_logs,
+            compute_derived_variables=base_evaluator_config.compute_derived_variables,
+        )
+        nvtx.end_range(start_range)
+
     for batch in batched(base_evaluator_config.loader.start_indices.list, n=batch_size):
+        if base_evaluator_config.inference_only:
+            break
         batch_loader = dataclasses.replace(
             base_evaluator_config.loader,
             start_indices=ExplicitIndices(list(batch)),

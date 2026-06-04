@@ -38,7 +38,6 @@ from yaml_utils import (
 
 
 
-
 def _exit_on_job_failure(e: Exception, msg_prefix: str = "Stopping") -> None:
     """Print message and exit with code 1 on training or inference job failure."""
     print(f"\n{'='*60}")
@@ -48,7 +47,7 @@ def _exit_on_job_failure(e: Exception, msg_prefix: str = "Stopping") -> None:
 
 
 def main_loop(
-    n_iterations: int = 1,
+    n_iterations: int = 3,
     n_initial_indices: int = 10,
     data_path: str = "/scratch/gpfs/GVECCHI/el2358/ace/training_data",
     yaml_dir: str | None = None,
@@ -190,7 +189,7 @@ def main_loop(
         update_yaml_training_indices(training_yaml_file, training_indices_list, total_time_indices)
         print(f"Updated {training_yaml_file}")
 
-    # Run training with initial random points (submit SLURM jobs for model1 and model2)
+    # Run training with initial random points (one SLURM job runs both models in parallel)
     print("\nRunning training with initial random points...")
     valid_training_yaml_files = [f for f in training_yaml_files if os.path.exists(f)]
     valid_inference_yaml_files = [f for f in fast_inference_yaml_files if os.path.exists(f)]
@@ -231,13 +230,13 @@ def main_loop(
         print(f"{'='*60}")
         print(f"Current indices list: {training_indices_list}")
 
-        # Run inference: submit model1 and model2 fast-inference SLURM jobs in parallel
+        # Run inference: one SLURM job runs model1 and model2 in parallel
         shell_dir = Path(__file__).parent.parent / "shell"
         inference_script = shell_dir / "batch_fast_inference.sh"
         if not inference_script.exists():
             print("Warning: Fast inference batch script not found; skipping inference.")
         else:
-            print("Submitting fast inference jobs (model1 and model2) in parallel...")
+            print("Submitting paired fast inference job (model1 and model2 in parallel)...")
             try:
                 t0 = time.time()
                 submit_batched_inference_jobs(
@@ -305,7 +304,7 @@ def main_loop(
             update_yaml_training_indices(training_yaml_file, training_indices_list, total_time_indices)
             print(f"Updated {training_yaml_file}")
 
-        # Run training with new indices (submit SLURM jobs for model1 and model2)
+        # Run training with new indices (one SLURM job runs both models in parallel)
         print("\nRunning training with new indices...")
         shell_dir = Path(__file__).parent.parent / "shell"
         training_script = shell_dir / "batch_training.sh"

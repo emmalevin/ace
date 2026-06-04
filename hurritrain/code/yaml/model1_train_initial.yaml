@@ -2,7 +2,7 @@ experiment_dir: /scratch/gpfs/GVECCHI/el2358/ace/hurritrain/training_output/mode
 save_checkpoint: true
 save_restart_every_n_epochs: 999
 validate_using_ema: true
-max_epochs: 1
+max_epochs: 2
 n_forward_steps: 2
 seed: 42
 inference: null
@@ -33,6 +33,11 @@ train_loader:
     - 1036
     - 1106
     - 1161
+    - 878
+    - 872
+    - 879
+    - 871
+    - 875
 validation_loader:
   batch_size: 2
   num_data_workers: 4

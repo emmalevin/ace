@@ -182,7 +182,9 @@ class InferenceGriddedData(InferenceDataABC[PrognosticState, BatchData]):
         self._loader = loader
         self._properties = properties.to_device()
         self._n_initial_conditions: int | None = None
+        self._ic_requirements: PrognosticStateDataRequirements | None = None
         if isinstance(initial_condition, PrognosticStateDataRequirements):
+            self._ic_requirements = initial_condition
             raw_iter = iter(loader)
             first_batch = next(raw_iter).to_device()
             self._initial_condition: PrognosticState = first_batch.get_start(
@@ -198,6 +200,35 @@ class InferenceGriddedData(InferenceDataABC[PrognosticState, BatchData]):
             self._first_batch_cache = None
             self._advanced_loader_iter = None
         self._initial_time: xr.DataArray | None = None
+
+    def extract_initial_condition(self, batch: BatchData) -> PrognosticState:
+        """Extract a prognostic state from a batch's first timestep(s).
+
+        Used by the Looper at chunk boundaries to reset state for a new chunk.
+        Requires this data object to have been constructed with a
+        PrognosticStateDataRequirements initial_condition.
+        """
+        if self._ic_requirements is None:
+            raise ValueError(
+                "extract_initial_condition requires the data object to be "
+                "constructed with a PrognosticStateDataRequirements initial_condition."
+            )
+        return batch.get_start(
+            prognostic_names=self._ic_requirements.names,
+            n_ic_timesteps=self._ic_requirements.n_timesteps,
+        )
+
+    @property
+    def windows_per_chunk(self) -> int | None:
+        return getattr(self._loader.dataset, "windows_per_chunk", None)
+
+    @property
+    def n_ic_chunks(self) -> int:
+        return getattr(self._loader.dataset, "n_ic_chunks", 1)
+
+    @property
+    def ic_chunk_size(self) -> int | None:
+        return getattr(self._loader.dataset, "ic_chunk_size", None)
 
     @staticmethod
     def _wrap_iter_on_device(raw_iter: Iterator[BatchData]) -> Iterator[BatchData]:

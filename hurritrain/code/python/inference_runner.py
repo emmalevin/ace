@@ -7,7 +7,6 @@ import re
 import subprocess
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor
 
 
 def run_inference(
@@ -105,15 +104,14 @@ def _submit_sbatch(
     return int(match.group(0))
 
 
-def _model_exports(
-    model_id: int,
-    yaml_path: str,
+def _paired_model_exports(
+    model_yaml_paths: tuple[str, str],
     extra_exports: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    """Build the exported environment for generic model batch scripts."""
+    """Build exported environment for one batch job that runs both models."""
     exports: dict[str, object] = {
-        "MODEL_ID": model_id,
-        "YAML_FILE": os.path.abspath(yaml_path),
+        "YAML_FILE_MODEL1": os.path.abspath(model_yaml_paths[0]),
+        "YAML_FILE_MODEL2": os.path.abspath(model_yaml_paths[1]),
     }
     if extra_exports:
         exports.update(extra_exports)
@@ -166,9 +164,9 @@ def _job_succeeded(job_id: int) -> bool:
 
 
 class InferenceJobFailureError(Exception):
-    """Raised when one or more submitted inference jobs failed (e.g. OOM, non-zero exit)."""
+    """Raised when a submitted inference job failed (e.g. OOM, non-zero exit)."""
 
-    def __init__(self, message: str, job_ids: tuple[int, int], failed_mask: tuple[bool, bool]):
+    def __init__(self, message: str, job_ids: tuple[int, ...], failed_mask: tuple[bool, ...]):
         super().__init__(message)
         self.job_ids = job_ids
         self.failed_mask = failed_mask
@@ -180,66 +178,46 @@ def submit_batched_inference_jobs(
     wait: bool = True,
     poll_interval: int = 60,
     profile_models: tuple[bool, bool] = (False, False),
-) -> tuple[int, int]:
+    nproc_per_model: int = 1,
+) -> int:
     """
-    Submit generic inference SLURM jobs for model1 and model2 in parallel,
-    then optionally wait for both to complete.
+    Submit one inference SLURM job that runs model1 and model2 in parallel,
+    then optionally wait for completion.
 
     Args:
         batch_script_path: Path to batch_fast_inference.sh.
         model_yaml_paths: (model1_yaml, model2_yaml).
-        wait: If True, block until both jobs have finished (default True).
+        wait: If True, block until the paired job has finished (default True).
         poll_interval: Seconds between squeue checks when waiting (default 60).
         profile_models: Enable nsys profiling per model.
+        nproc_per_model: Torch processes per model; inference defaults to one GPU each.
 
     Returns:
-        (job_id_model1, job_id_model2).
+        Paired inference Slurm job ID.
     """
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        f1 = executor.submit(
-            _submit_sbatch,
-            batch_script_path,
-            exports=_model_exports(
-                1,
-                model_yaml_paths[0],
-                {"PROFILE": int(profile_models[0]), "NPROC_PER_NODE": 1},
-            ),
-            sbatch_args=["--job-name=ace_inf_m1"],
-        )
-        f2 = executor.submit(
-            _submit_sbatch,
-            batch_script_path,
-            exports=_model_exports(
-                2,
-                model_yaml_paths[1],
-                {"PROFILE": int(profile_models[1]), "NPROC_PER_NODE": 1},
-            ),
-            sbatch_args=["--job-name=ace_inf_m2"],
-        )
-        job_id1 = f1.result()
-        job_id2 = f2.result()
-    print(f"Submitted model1 inference job: {job_id1}")
-    print(f"Submitted model2 inference job: {job_id2}")
+    exports = _paired_model_exports(
+        model_yaml_paths,
+        {
+            "PROFILE_MODEL1": int(profile_models[0]),
+            "PROFILE_MODEL2": int(profile_models[1]),
+            "NPROC_PER_MODEL": nproc_per_model,
+        },
+    )
+    job_id = _submit_sbatch(
+        batch_script_path,
+        exports=exports,
+        sbatch_args=["--job-name=ace_inf_pair"],
+    )
+    print(f"Submitted paired inference job: {job_id}")
     if wait:
-        print("Waiting for both jobs to complete...")
-        _wait_for_job(job_id1, poll_interval=poll_interval)
-        _wait_for_job(job_id2, poll_interval=poll_interval)
-        print("Both inference jobs completed.")
-        # Check exit status (sacct may need a moment to update)
+        print("Waiting for paired inference job to complete...")
+        _wait_for_job(job_id, poll_interval=poll_interval)
+        print("Paired inference job completed.")
         time.sleep(5)
-        ok1 = _job_succeeded(job_id1)
-        ok2 = _job_succeeded(job_id2)
-        if not ok1 or not ok2:
-            failed = (not ok1, not ok2)
-            names = []
-            if not ok1:
-                names.append("model1")
-            if not ok2:
-                names.append("model2")
+        if not _job_succeeded(job_id):
             raise InferenceJobFailureError(
-                f"Inference job(s) failed: {', '.join(names)} (job IDs: {job_id1}, {job_id2}). "
-                "Check slurm .err/.out files for details.",
-                job_ids=(job_id1, job_id2),
-                failed_mask=failed,
+                f"Inference job failed (job ID: {job_id}). Check slurm .err/.out files for details.",
+                job_ids=(job_id,),
+                failed_mask=(True,),
             )
-    return job_id1, job_id2
+    return job_id

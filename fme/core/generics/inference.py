@@ -52,6 +52,10 @@ class Looper(Generic[PS, FD, SD]):
             self._loader = data.advanced_loader_iter
         else:
             self._loader = iter(data.loader)
+        self._data = data
+        self._windows_per_chunk = getattr(data, "windows_per_chunk", self._len)
+        self._n_ic_chunks = getattr(data, "n_ic_chunks", 1)
+        self._iter_count = 0
 
     def __iter__(self) -> Iterator[SD]:
         return self
@@ -74,15 +78,39 @@ class Looper(Generic[PS, FD, SD]):
                         forcing_data = next(self._loader)
                     except StopIteration:
                         raise StopIteration
+        window_in_chunk = self._iter_count % self._windows_per_chunk
+        if window_in_chunk == 0 and self._iter_count > 0:
+            extract = getattr(self._data, "extract_initial_condition", None)
+            if extract is not None:
+                self._prognostic_state = extract(forcing_data)
         output_data, self._prognostic_state = self._predict(
             self._prognostic_state,
             forcing=forcing_data,
             compute_derived_variables=self._compute_derived_variables,
         )
+        self._iter_count += 1
         return output_data
 
     def get_prognostic_state(self) -> PS:
         return self._prognostic_state
+
+    @property
+    def current_chunk_idx(self) -> int:
+        """Chunk index of the LAST batch returned by __next__."""
+        return max(0, self._iter_count - 1) // self._windows_per_chunk
+
+    @property
+    def current_window_in_chunk(self) -> int:
+        """Window index within current chunk of the LAST batch returned."""
+        return max(0, self._iter_count - 1) % self._windows_per_chunk
+
+    @property
+    def windows_per_chunk(self) -> int:
+        return self._windows_per_chunk
+
+    @property
+    def n_ic_chunks(self) -> int:
+        return self._n_ic_chunks
 
 
 def get_record_to_wandb(label: str = "") -> Callable[[InferenceLogs], None]:
@@ -143,10 +171,18 @@ def run_inference(
     with timer.context("data_writer"):
         writer.write(data.initial_condition, "initial_condition.nc")
     n_windows = len(looper)
+    ic_chunk_size = getattr(data, "ic_chunk_size", None)
     for i, batch in enumerate(looper):
         logging.info(
             f"Inference: processing output from window {i + 1} of {n_windows}."
         )
+        if (
+            ic_chunk_size is not None
+            and looper.current_window_in_chunk == 0
+            and looper.current_chunk_idx > 0
+            and hasattr(writer, "set_sample_start")
+        ):
+            writer.set_sample_start(looper.current_chunk_idx * ic_chunk_size)
         with timer.context("data_writer"):
             writer.append_batch(
                 batch=batch,

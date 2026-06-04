@@ -125,6 +125,7 @@ def get_inference_data(
     surface_temperature_name: str | None = None,
     ocean_fraction_name: str | None = None,
     xarray_dataset: XarrayDataset | None = None,
+    ic_chunk_size: int | None = None,
 ) -> InferenceGriddedData:
     """
     Args:
@@ -154,6 +155,7 @@ def get_inference_data(
         ocean_fraction_name=ocean_fraction_name,
         label_override=label_override,
         dataset=xarray_dataset,
+        ic_chunk_size=ic_chunk_size,
     )
     properties = dataset.properties
 
