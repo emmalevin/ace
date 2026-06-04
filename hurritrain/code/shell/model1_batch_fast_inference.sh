@@ -8,6 +8,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --mem=128G
 #SBATCH --time=1:00:00
+#SBATCH --account=gvecchi
 #SBATCH --reservation=hackathon
 #SBATCH --constraint=a100
 
@@ -28,7 +29,7 @@ echo "MASTER_PORT=$MASTER_PORT"
 
 YAML_FILE=/scratch/gpfs/GVECCHI/el2358/ace/hurritrain/code/yaml/model1_fast_inference.yaml
 
-srun /usr/local/bin/nsys profile -o timeline_output_v1_june3_145pm_m1_inf --force-overwrite true --trace cuda,nvtx,osrt torchrun  --master_port=$MASTER_PORT \
+srun /usr/local/bin/nsys profile -o timeline_output_v1_june4_11am_m1_inf --force-overwrite true --trace cuda,nvtx,osrt torchrun  --master_port=$MASTER_PORT \
      -m fme.ace.batched_evaluator "$YAML_FILE"
 
 

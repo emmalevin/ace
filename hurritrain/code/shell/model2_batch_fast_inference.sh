@@ -4,7 +4,7 @@
 #SBATCH --error=/scratch/gpfs/GVECCHI/el2358/ace/hurritrain/slurm/model2_inf_%A_%a.err
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=1
 #SBATCH --gres=gpu:1
 #SBATCH --mem=128G
 #SBATCH --time=1:00:00

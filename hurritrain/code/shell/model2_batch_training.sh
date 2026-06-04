@@ -5,13 +5,13 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --gres=gpu:1
-#SBATCH --mem=128G
-#SBATCH --time=1:00:00
+#SBATCH --gres=gpu:2
+#SBATCH --mem=20G
+#SBATCH --time=2:00:00
 #SBATCH --account=gvecchi
 #SBATCH --reservation=hackathon
 #SBATCH --constraint=a100
-#SBATCH --exclusive
+##SBATCH --exclusive
 
 module purge
 module load anaconda3/2025.6

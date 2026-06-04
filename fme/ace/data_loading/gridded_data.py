@@ -183,12 +183,34 @@ class InferenceGriddedData(InferenceDataABC[PrognosticState, BatchData]):
         self._properties = properties.to_device()
         self._n_initial_conditions: int | None = None
         if isinstance(initial_condition, PrognosticStateDataRequirements):
-            self._initial_condition: PrognosticState = get_initial_condition(
-                loader, initial_condition
+            raw_iter = iter(loader)
+            first_batch = next(raw_iter).to_device()
+            self._initial_condition: PrognosticState = first_batch.get_start(
+                prognostic_names=initial_condition.names,
+                n_ic_timesteps=initial_condition.n_timesteps,
+            )
+            self._first_batch_cache: BatchData | None = first_batch
+            self._advanced_loader_iter: Iterator[BatchData] | None = (
+                self._wrap_iter_on_device(raw_iter)
             )
         else:
             self._initial_condition = initial_condition.to_device()
+            self._first_batch_cache = None
+            self._advanced_loader_iter = None
         self._initial_time: xr.DataArray | None = None
+
+    @staticmethod
+    def _wrap_iter_on_device(raw_iter: Iterator[BatchData]) -> Iterator[BatchData]:
+        for batch in raw_iter:
+            yield batch.to_device()
+
+    @property
+    def first_batch_cache(self) -> BatchData | None:
+        return self._first_batch_cache
+
+    @property
+    def advanced_loader_iter(self) -> Iterator[BatchData] | None:
+        return self._advanced_loader_iter
 
     @property
     def loader(self) -> DataLoader[BatchData]:

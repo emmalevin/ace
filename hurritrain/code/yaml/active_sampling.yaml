@@ -1,7 +1,7 @@
 # Active learning loop config (loop_point_selection.py).
 # Relative paths are resolved against this file's directory.
 
-n_iterations: 3
+n_iterations: 1
 n_initial_indices: 10
 seed: 42
 n_top: 5

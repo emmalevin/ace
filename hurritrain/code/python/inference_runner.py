@@ -7,7 +7,7 @@ import re
 import subprocess
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 
 
 def run_inference(
@@ -68,15 +68,28 @@ def run_inference(
     return result
 
 
-def _submit_sbatch(script_path: str) -> int:
+def _submit_sbatch(
+    script_path: str,
+    exports: dict[str, object] | None = None,
+    sbatch_args: list[str] | None = None,
+) -> int:
     """Submit a single script via sbatch; return job ID. Raises on failure."""
     script_path = os.path.abspath(script_path)
     if not os.path.exists(script_path):
         raise FileNotFoundError(f"Script not found: {script_path}")
-    cwd = os.path.dirname(script_path)
+
+    cmd = ["sbatch", "--parsable"]
+    if exports:
+        export_values = ["ALL"]
+        export_values.extend(f"{key}={value}" for key, value in exports.items())
+        cmd.append(f"--export={','.join(export_values)}")
+    if sbatch_args:
+        cmd.extend(sbatch_args)
+    cmd.append(os.path.basename(script_path))
+
     result = subprocess.run(
-        ["sbatch", os.path.basename(script_path)],
-        cwd=cwd,
+        cmd,
+        cwd=os.path.dirname(script_path),
         capture_output=True,
         text=True,
     )
@@ -84,11 +97,27 @@ def _submit_sbatch(script_path: str) -> int:
         raise RuntimeError(
             f"sbatch failed: {result.stderr or result.stdout or 'unknown error'}"
         )
-    # Parse "Submitted batch job 12345"
-    match = re.search(r"Submitted batch job (\d+)", result.stdout)
+
+    # --parsable returns "12345" or "12345;cluster".
+    match = re.search(r"\d+", result.stdout.strip())
     if not match:
         raise RuntimeError(f"Could not parse job ID from sbatch output: {result.stdout}")
-    return int(match.group(1))
+    return int(match.group(0))
+
+
+def _model_exports(
+    model_id: int,
+    yaml_path: str,
+    extra_exports: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Build the exported environment for generic model batch scripts."""
+    exports: dict[str, object] = {
+        "MODEL_ID": model_id,
+        "YAML_FILE": os.path.abspath(yaml_path),
+    }
+    if extra_exports:
+        exports.update(extra_exports)
+    return exports
 
 
 def _wait_for_job(job_id: int, poll_interval: int = 60) -> None:
@@ -146,27 +175,47 @@ class InferenceJobFailureError(Exception):
 
 
 def submit_batched_inference_jobs(
-    model1_script_path: str,
-    model2_script_path: str,
+    batch_script_path: str,
+    model_yaml_paths: tuple[str, str],
     wait: bool = True,
     poll_interval: int = 60,
+    profile_models: tuple[bool, bool] = (False, False),
 ) -> tuple[int, int]:
     """
-    Submit the two batched inference SLURM scripts (model1 and model2) in parallel,
+    Submit generic inference SLURM jobs for model1 and model2 in parallel,
     then optionally wait for both to complete.
 
     Args:
-        model1_script_path: Path to model1_batched_array_inference.sh.
-        model2_script_path: Path to model2_batched_array_inference.sh.
+        batch_script_path: Path to batch_fast_inference.sh.
+        model_yaml_paths: (model1_yaml, model2_yaml).
         wait: If True, block until both jobs have finished (default True).
         poll_interval: Seconds between squeue checks when waiting (default 60).
+        profile_models: Enable nsys profiling per model.
 
     Returns:
         (job_id_model1, job_id_model2).
     """
     with ThreadPoolExecutor(max_workers=2) as executor:
-        f1 = executor.submit(_submit_sbatch, model1_script_path)
-        f2 = executor.submit(_submit_sbatch, model2_script_path)
+        f1 = executor.submit(
+            _submit_sbatch,
+            batch_script_path,
+            exports=_model_exports(
+                1,
+                model_yaml_paths[0],
+                {"PROFILE": int(profile_models[0]), "NPROC_PER_NODE": 1},
+            ),
+            sbatch_args=["--job-name=ace_inf_m1"],
+        )
+        f2 = executor.submit(
+            _submit_sbatch,
+            batch_script_path,
+            exports=_model_exports(
+                2,
+                model_yaml_paths[1],
+                {"PROFILE": int(profile_models[1]), "NPROC_PER_NODE": 1},
+            ),
+            sbatch_args=["--job-name=ace_inf_m2"],
+        )
         job_id1 = f1.result()
         job_id2 = f2.result()
     print(f"Submitted model1 inference job: {job_id1}")

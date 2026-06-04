@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from inference_runner import (
     _job_succeeded,
+    _model_exports,
     _submit_sbatch,
     _wait_for_job,
 )
@@ -22,20 +23,24 @@ class TrainingJobFailureError(Exception):
 
 
 def submit_batched_training_jobs(
-    model1_script_path: str,
-    model2_script_path: str,
+    batch_script_path: str,
+    model_yaml_paths: tuple[str, str],
     wait: bool = True,
     poll_interval: int = 60,
+    profile_models: tuple[bool, bool] = (False, False),
+    nproc_per_node: int = 2,
 ) -> tuple[int, int]:
     """
-    Submit the two training SLURM scripts (model1 and model2) in parallel,
+    Submit generic training SLURM jobs for model1 and model2 in parallel,
     then optionally wait for both to complete and check exit status.
 
     Args:
-        model1_script_path: Path to model1_batch_training.sh.
-        model2_script_path: Path to model2_batch_training.sh.
+        batch_script_path: Path to batch_training.sh.
+        model_yaml_paths: (model1_yaml, model2_yaml).
         wait: If True, block until both jobs have finished (default True).
         poll_interval: Seconds between squeue checks when waiting (default 60).
+        profile_models: Enable nsys profiling per model.
+        nproc_per_node: Torch processes per training job; matches the 2-GPU request by default.
 
     Returns:
         (job_id_model1, job_id_model2).
@@ -44,8 +49,26 @@ def submit_batched_training_jobs(
         TrainingJobFailureError: If wait is True and either job failed.
     """
     with ThreadPoolExecutor(max_workers=2) as executor:
-        f1 = executor.submit(_submit_sbatch, model1_script_path)
-        f2 = executor.submit(_submit_sbatch, model2_script_path)
+        f1 = executor.submit(
+            _submit_sbatch,
+            batch_script_path,
+            exports=_model_exports(
+                1,
+                model_yaml_paths[0],
+                {"PROFILE": int(profile_models[0]), "NPROC_PER_NODE": nproc_per_node},
+            ),
+            sbatch_args=["--job-name=ace_train_m1"],
+        )
+        f2 = executor.submit(
+            _submit_sbatch,
+            batch_script_path,
+            exports=_model_exports(
+                2,
+                model_yaml_paths[1],
+                {"PROFILE": int(profile_models[1]), "NPROC_PER_NODE": nproc_per_node},
+            ),
+            sbatch_args=["--job-name=ace_train_m2"],
+        )
         job_id1 = f1.result()
         job_id2 = f2.result()
     print(f"Submitted model1 training job: {job_id1}")

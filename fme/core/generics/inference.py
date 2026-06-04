@@ -46,8 +46,12 @@ class Looper(Generic[PS, FD, SD]):
         self._predict = predict
         self._prognostic_state = data.initial_condition
         self._len = len(data.loader)
-        self._loader = iter(data.loader)
         self._compute_derived_variables = compute_derived_variables
+        self._first_batch_pending = getattr(data, "first_batch_cache", None)
+        if self._first_batch_pending is not None:
+            self._loader = data.advanced_loader_iter
+        else:
+            self._loader = iter(data.loader)
 
     def __iter__(self) -> Iterator[SD]:
         return self
@@ -62,10 +66,14 @@ class Looper(Generic[PS, FD, SD]):
         timer = GlobalTimer.get_instance()
         with nvtx.annotate("data_loading", color="green"):
             with timer.context("data_loading"):
-                try:
-                    forcing_data = next(self._loader)
-                except StopIteration:
-                    raise StopIteration
+                if self._first_batch_pending is not None:
+                    forcing_data = self._first_batch_pending
+                    self._first_batch_pending = None
+                else:
+                    try:
+                        forcing_data = next(self._loader)
+                    except StopIteration:
+                        raise StopIteration
         output_data, self._prognostic_state = self._predict(
             self._prognostic_state,
             forcing=forcing_data,

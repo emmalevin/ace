@@ -9,7 +9,6 @@ import time
 from pathlib import Path
 
 import numpy as np
-import torch
 import xarray as xr
 
 from acquisition import (
@@ -37,7 +36,6 @@ from yaml_utils import (
     update_yaml_training_indices,
 )
 
-torch.cuda.empty_cache()
 
 
 
@@ -50,7 +48,7 @@ def _exit_on_job_failure(e: Exception, msg_prefix: str = "Stopping") -> None:
 
 
 def main_loop(
-    n_iterations: int = 2,
+    n_iterations: int = 1,
     n_initial_indices: int = 10,
     data_path: str = "/scratch/gpfs/GVECCHI/el2358/ace/training_data",
     yaml_dir: str | None = None,
@@ -203,18 +201,17 @@ def main_loop(
         print("Warning: No valid YAML files found for inference")
     else:
         shell_dir = Path(__file__).parent.parent / "shell"
-        model1_train_script = shell_dir / "model1_batch_training.sh"
-        model2_train_script = shell_dir / "model2_batch_training.sh"
-        if not model1_train_script.exists() or not model2_train_script.exists():
-            print("Warning: Training batch scripts not found; skipping training.")
+        training_script = shell_dir / "batch_training.sh"
+        if not training_script.exists():
+            print("Warning: Training batch script not found; skipping training.")
         else:
             # Note: max_epochs was set to initial_max_epochs above; initial training
             # runs that many epochs from a fresh checkpoint. No bump here.
             try:
                 t0 = time.time()
                 submit_batched_training_jobs(
-                    str(model1_train_script),
-                    str(model2_train_script),
+                    str(training_script),
+                    (training_yaml_files[0], training_yaml_files[1]),
                     wait=True,
                 )
                 elapsed = time.time() - t0
@@ -236,17 +233,16 @@ def main_loop(
 
         # Run inference: submit model1 and model2 fast-inference SLURM jobs in parallel
         shell_dir = Path(__file__).parent.parent / "shell"
-        model1_script = shell_dir / "model1_batch_fast_inference.sh"
-        model2_script = shell_dir / "model2_batch_fast_inference.sh"
-        if not model1_script.exists() or not model2_script.exists():
-            print("Warning: Fast inference scripts not found; skipping inference.")
+        inference_script = shell_dir / "batch_fast_inference.sh"
+        if not inference_script.exists():
+            print("Warning: Fast inference batch script not found; skipping inference.")
         else:
             print("Submitting fast inference jobs (model1 and model2) in parallel...")
             try:
                 t0 = time.time()
                 submit_batched_inference_jobs(
-                    str(model1_script),
-                    str(model2_script),
+                    str(inference_script),
+                    (fast_inference_yaml_files[0], fast_inference_yaml_files[1]),
                     wait=True,
                 )
                 elapsed = time.time() - t0
@@ -312,10 +308,9 @@ def main_loop(
         # Run training with new indices (submit SLURM jobs for model1 and model2)
         print("\nRunning training with new indices...")
         shell_dir = Path(__file__).parent.parent / "shell"
-        model1_train_script = shell_dir / "model1_batch_training.sh"
-        model2_train_script = shell_dir / "model2_batch_training.sh"
-        if not model1_train_script.exists() or not model2_train_script.exists():
-            print("Warning: Training batch scripts not found; skipping training.")
+        training_script = shell_dir / "batch_training.sh"
+        if not training_script.exists():
+            print("Warning: Training batch script not found; skipping training.")
         else:
             for training_yaml_file in [f for f in training_yaml_files if os.path.exists(f)]:
                 new_max = update_yaml_max_epochs(training_yaml_file, increment=1)
@@ -323,8 +318,8 @@ def main_loop(
             try:
                 t0 = time.time()
                 submit_batched_training_jobs(
-                    str(model1_train_script),
-                    str(model2_train_script),
+                    str(training_script),
+                    (training_yaml_files[0], training_yaml_files[1]),
                     wait=True,
                 )
                 elapsed = time.time() - t0
